@@ -8,10 +8,10 @@ export interface RawModelInfo {
 }
 
 export interface ModelOption {
-  provider: 'whisper' | 'parakeet';
+  provider: 'whisper' | 'parakeet' | 'deepgram';
   name: string;
   displayName: string;
-  size_mb: number;
+  size_mb?: number;
 }
 
 interface TranscriptModelConfig {
@@ -20,7 +20,7 @@ interface TranscriptModelConfig {
 }
 
 /**
- * Custom hook for fetching and managing transcription models (Whisper and Parakeet).
+ * Custom hook for fetching and managing transcription models (Whisper, Parakeet, and Deepgram).
  *
  * This hook centralizes the model fetching logic that was previously duplicated
  * in ImportAudioDialog and RetranscribeDialog components.
@@ -44,6 +44,20 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
   const fetchModels = useCallback(async () => {
     setLoadingModels(true);
     const allModels: ModelOption[] = [];
+
+    // Add Deepgram cloud models
+    allModels.push(
+      {
+        provider: 'deepgram',
+        name: 'nova-2',
+        displayName: '☁️ Deepgram: Nova-2 (Fast Cloud)',
+      },
+      {
+        provider: 'deepgram',
+        name: 'nova-2-meeting',
+        displayName: '☁️ Deepgram: Nova-2 Meeting',
+      }
+    );
 
     // Fetch Whisper models
     try {
@@ -88,7 +102,8 @@ export function useTranscriptionModels(transcriptModelConfig: TranscriptModelCon
     const configuredMatch = allModels.find(
       (m) =>
         (configuredProvider === 'localWhisper' && m.provider === 'whisper' && m.name === configuredModel) ||
-        (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel)
+        (configuredProvider === 'parakeet' && m.provider === 'parakeet' && m.name === configuredModel) ||
+        (configuredProvider === 'deepgram' && m.provider === 'deepgram' && (m.name === configuredModel || (!configuredModel && m.name === 'nova-2')))
     );
 
     // Only set default model if user hasn't manually selected one

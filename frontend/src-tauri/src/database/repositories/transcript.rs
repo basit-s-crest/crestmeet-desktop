@@ -1,6 +1,8 @@
+// src/database/repositories/transcript.rs
+
 use crate::api::{TranscriptSearchResult, TranscriptSegment};
 use chrono::Utc;
-use sqlx::{Connection, Error as SqlxError, SqlitePool};
+use sqlx::{Connection, Error as SqlxError, PgPool};
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -11,7 +13,7 @@ impl TranscriptsRepository {
     /// This function uses a transaction to ensure that either both the meeting
     /// and all its transcripts are saved, or none of them are.
     pub async fn save_transcript(
-        pool: &SqlitePool,
+        pool: &PgPool,
         meeting_title: &str,
         transcripts: &[TranscriptSegment],
         folder_path: Option<String>,
@@ -25,7 +27,7 @@ impl TranscriptsRepository {
 
         // 1. Create the new meeting
         let result = sqlx::query(
-            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(&meeting_id)
         .bind(meeting_title)
@@ -48,7 +50,7 @@ impl TranscriptsRepository {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
             let result = sqlx::query(
                 "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)"
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)"
             )
             .bind(&transcript_id)
             .bind(&meeting_id)
@@ -85,7 +87,7 @@ impl TranscriptsRepository {
     /// Searches for a query string within the transcripts.
     /// It returns a list of matching transcripts with context.
     pub async fn search_transcripts(
-        pool: &SqlitePool,
+        pool: &PgPool,
         query: &str,
     ) -> Result<Vec<TranscriptSearchResult>, SqlxError> {
         if query.trim().is_empty() {
@@ -98,7 +100,7 @@ impl TranscriptsRepository {
             "SELECT m.id, m.title, t.transcript, t.timestamp
              FROM meetings m
              JOIN transcripts t ON m.id = t.meeting_id
-             WHERE LOWER(t.transcript) LIKE ?",
+             WHERE LOWER(t.transcript) LIKE $1",
         )
         .bind(&search_query)
         .fetch_all(pool)
@@ -120,27 +122,50 @@ impl TranscriptsRepository {
         Ok(results)
     }
 
-    /// Helper function to extract a snippet of text around the first match of a query.
+    /// Generates a snippet of text surrounding the first match of the query.
     fn get_match_context(transcript: &str, query: &str) -> String {
         let transcript_lower = transcript.to_lowercase();
         let query_lower = query.to_lowercase();
 
-        match transcript_lower.find(&query_lower) {
-            Some(match_index) => {
-                let start_index = match_index.saturating_sub(100);
-                let end_index = (match_index + query.len() + 100).min(transcript.len());
+        if let Some(start_byte) = transcript_lower.find(&query_lower) {
+            let context_chars = 30;
 
-                let mut context = String::new();
-                if start_index > 0 {
-                    context.push_str("...");
-                }
-                context.push_str(&transcript[start_index..end_index]);
-                if end_index < transcript.len() {
-                    context.push_str("...");
-                }
-                context
+            let char_indices: Vec<(usize, char)> = transcript.char_indices().collect();
+
+            let match_char_idx = char_indices
+                .iter()
+                .position(|(byte_idx, _)| *byte_idx == start_byte)
+                .unwrap_or(0);
+
+            let query_char_len = query.chars().count();
+            let match_end_char_idx = match_char_idx + query_char_len;
+
+            let start_char_idx = match_char_idx.saturating_sub(context_chars);
+            let end_char_idx = (match_end_char_idx + context_chars).min(char_indices.len());
+
+            let start_byte_pos = char_indices[start_char_idx].0;
+            let end_byte_pos = if end_char_idx < char_indices.len() {
+                char_indices[end_char_idx].0
+            } else {
+                transcript.len()
+            };
+
+            let mut context = transcript[start_byte_pos..end_byte_pos].to_string();
+
+            if start_char_idx > 0 {
+                context = format!("...{}", context);
             }
-            None => transcript.chars().take(200).collect(), // Fallback to the start of the transcript
+            if end_char_idx < char_indices.len() {
+                context = format!("{}...", context);
+            }
+
+            context
+        } else {
+            let mut end = 60;
+            while !transcript.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            format!("{}...", &transcript[..end])
         }
     }
 }

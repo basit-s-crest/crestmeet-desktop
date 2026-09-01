@@ -80,7 +80,7 @@ export default function RootLayout({
     // Check onboarding status first
     invoke<{ completed: boolean } | null>('get_onboarding_status')
       .then((status) => {
-        const isComplete = status?.completed ?? false
+        const isComplete = status?.completed ?? true
         setOnboardingCompleted(isComplete)
 
         if (!isComplete) {
@@ -88,13 +88,13 @@ export default function RootLayout({
           setShowOnboarding(true)
         } else {
           console.log('[Layout] Onboarding completed, showing main app')
+          setShowOnboarding(false)
         }
       })
       .catch((error) => {
         console.error('[Layout] Failed to check onboarding status:', error)
-        // Default to showing onboarding if we can't check
-        setShowOnboarding(true)
-        setOnboardingCompleted(false)
+        setShowOnboarding(false)
+        setOnboardingCompleted(true)
       })
   }, [])
 

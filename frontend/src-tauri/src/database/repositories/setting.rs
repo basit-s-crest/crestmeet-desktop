@@ -1,6 +1,8 @@
+// src/database/repositories/setting.rs
+
 use crate::database::models::{Setting, TranscriptSetting};
 use crate::summary::CustomOpenAIConfig;
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 
 #[derive(serde::Deserialize, Debug)]
 pub struct SaveModelConfigRequest {
@@ -24,13 +26,9 @@ pub struct SaveTranscriptConfigRequest {
 
 pub struct SettingsRepository;
 
-// Transcript providers: localWhisper, deepgram, elevenLabs, groq, openai
-// Summary providers: openai, claude, ollama, groq, added openrouter
-// NOTE: Handle data exclusion in the higher layer as this is database abstraction layer(using SELECT *)
-
 impl SettingsRepository {
     pub async fn get_model_config(
-        pool: &SqlitePool,
+        pool: &PgPool,
     ) -> std::result::Result<Option<Setting>, sqlx::Error> {
         let setting = sqlx::query_as::<_, Setting>("SELECT * FROM settings LIMIT 1")
             .fetch_optional(pool)
@@ -39,22 +37,21 @@ impl SettingsRepository {
     }
 
     pub async fn save_model_config(
-        pool: &SqlitePool,
+        pool: &PgPool,
         provider: &str,
         model: &str,
         whisper_model: &str,
         ollama_endpoint: Option<&str>,
     ) -> std::result::Result<(), sqlx::Error> {
-        // Using id '1' for backward compatibility
         sqlx::query(
             r#"
-            INSERT INTO settings (id, provider, model, whisperModel, ollamaEndpoint)
+            INSERT INTO settings (id, provider, model, "whisperModel", "ollamaEndpoint")
             VALUES ('1', $1, $2, $3, $4)
-            ON CONFLICT(id) DO UPDATE SET
-                provider = excluded.provider,
-                model = excluded.model,
-                whisperModel = excluded.whisperModel,
-                ollamaEndpoint = excluded.ollamaEndpoint
+            ON CONFLICT (id) DO UPDATE SET
+                provider = EXCLUDED.provider,
+                model = EXCLUDED.model,
+                "whisperModel" = EXCLUDED."whisperModel",
+                "ollamaEndpoint" = EXCLUDED."ollamaEndpoint"
             "#,
         )
         .bind(provider)
@@ -68,11 +65,10 @@ impl SettingsRepository {
     }
 
     pub async fn save_api_key(
-        pool: &SqlitePool,
+        pool: &PgPool,
         provider: &str,
         api_key: &str,
     ) -> std::result::Result<(), sqlx::Error> {
-        // Custom OpenAI uses JSON config (customOpenAIConfig) instead of a separate API key column
         if provider == "custom-openai" {
             return Err(sqlx::Error::Protocol(
                 "custom-openai provider should use save_custom_openai_config() instead of save_api_key()".into(),
@@ -85,7 +81,7 @@ impl SettingsRepository {
             "ollama" => "ollamaApiKey",
             "groq" => "groqApiKey",
             "openrouter" => "openRouterApiKey",
-            "builtin-ai" => return Ok(()), // No API key needed
+            "builtin-ai" => return Ok(()),
             _ => {
                 return Err(sqlx::Error::Protocol(
                     format!("Invalid provider: {}", provider).into(),
@@ -95,9 +91,9 @@ impl SettingsRepository {
 
         let query = format!(
             r#"
-            INSERT INTO settings (id, provider, model, whisperModel, "{}")
+            INSERT INTO settings (id, provider, model, "whisperModel", "{}")
             VALUES ('1', 'openai', 'gpt-4o-2024-11-20', 'large-v3', $1)
-            ON CONFLICT(id) DO UPDATE SET
+            ON CONFLICT (id) DO UPDATE SET
                 "{}" = $1
             "#,
             api_key_column, api_key_column
@@ -108,10 +104,9 @@ impl SettingsRepository {
     }
 
     pub async fn get_api_key(
-        pool: &SqlitePool,
+        pool: &PgPool,
         provider: &str,
     ) -> std::result::Result<Option<String>, sqlx::Error> {
-        // Custom OpenAI uses JSON config - extract API key from there
         if provider == "custom-openai" {
             let config = Self::get_custom_openai_config(pool).await?;
             return Ok(config.and_then(|c| c.api_key));
@@ -123,7 +118,7 @@ impl SettingsRepository {
             "groq" => "groqApiKey",
             "claude" => "anthropicApiKey",
             "openrouter" => "openRouterApiKey",
-            "builtin-ai" => return Ok(None), // No API key needed
+            "builtin-ai" => return Ok(None),
             _ => {
                 return Err(sqlx::Error::Protocol(
                     format!("Invalid provider: {}", provider).into(),
@@ -132,7 +127,7 @@ impl SettingsRepository {
         };
 
         let query = format!(
-            "SELECT {} FROM settings WHERE id = '1' LIMIT 1",
+            "SELECT \"{}\" FROM settings WHERE id = '1' LIMIT 1",
             api_key_column
         );
         let api_key = sqlx::query_scalar(&query).fetch_optional(pool).await?;
@@ -140,18 +135,17 @@ impl SettingsRepository {
     }
 
     pub async fn get_transcript_config(
-        pool: &SqlitePool,
+        pool: &PgPool,
     ) -> std::result::Result<Option<TranscriptSetting>, sqlx::Error> {
         let setting =
             sqlx::query_as::<_, TranscriptSetting>("SELECT * FROM transcript_settings LIMIT 1")
                 .fetch_optional(pool)
                 .await?;
         Ok(setting)
-
     }
 
     pub async fn save_transcript_config(
-        pool: &SqlitePool,
+        pool: &PgPool,
         provider: &str,
         model: &str,
     ) -> std::result::Result<(), sqlx::Error> {
@@ -159,9 +153,9 @@ impl SettingsRepository {
             r#"
             INSERT INTO transcript_settings (id, provider, model)
             VALUES ('1', $1, $2)
-            ON CONFLICT(id) DO UPDATE SET
-                provider = excluded.provider,
-                model = excluded.model
+            ON CONFLICT (id) DO UPDATE SET
+                provider = EXCLUDED.provider,
+                model = EXCLUDED.model
             "#,
         )
         .bind(provider)
@@ -173,13 +167,13 @@ impl SettingsRepository {
     }
 
     pub async fn save_transcript_api_key(
-        pool: &SqlitePool,
+        pool: &PgPool,
         provider: &str,
         api_key: &str,
     ) -> std::result::Result<(), sqlx::Error> {
         let api_key_column = match provider {
             "localWhisper" => "whisperApiKey",
-            "parakeet" => return Ok(()), // Parakeet doesn't need an API key, return early
+            "parakeet" => return Ok(()),
             "deepgram" => "deepgramApiKey",
             "elevenLabs" => "elevenLabsApiKey",
             "groq" => "groqApiKey",
@@ -195,7 +189,7 @@ impl SettingsRepository {
             r#"
             INSERT INTO transcript_settings (id, provider, model, "{}")
             VALUES ('1', 'parakeet', '{}', $1)
-            ON CONFLICT(id) DO UPDATE SET
+            ON CONFLICT (id) DO UPDATE SET
                 "{}" = $1
             "#,
             api_key_column, crate::config::DEFAULT_PARAKEET_MODEL, api_key_column
@@ -206,12 +200,12 @@ impl SettingsRepository {
     }
 
     pub async fn get_transcript_api_key(
-        pool: &SqlitePool,
+        pool: &PgPool,
         provider: &str,
     ) -> std::result::Result<Option<String>, sqlx::Error> {
         let api_key_column = match provider {
             "localWhisper" => "whisperApiKey",
-            "parakeet" => return Ok(None), // Parakeet doesn't need an API key
+            "parakeet" => return Ok(None),
             "deepgram" => "deepgramApiKey",
             "elevenLabs" => "elevenLabsApiKey",
             "groq" => "groqApiKey",
@@ -224,7 +218,7 @@ impl SettingsRepository {
         };
 
         let query = format!(
-            "SELECT {} FROM transcript_settings WHERE id = '1' LIMIT 1",
+            "SELECT \"{}\" FROM transcript_settings WHERE id = '1' LIMIT 1",
             api_key_column
         );
         let api_key = sqlx::query_scalar(&query).fetch_optional(pool).await?;
@@ -232,12 +226,11 @@ impl SettingsRepository {
     }
 
     pub async fn delete_api_key(
-        pool: &SqlitePool,
+        pool: &PgPool,
         provider: &str,
     ) -> std::result::Result<(), sqlx::Error> {
-        // Custom OpenAI uses JSON config - clear the entire config
         if provider == "custom-openai" {
-            sqlx::query("UPDATE settings SET customOpenAIConfig = NULL WHERE id = '1'")
+            sqlx::query("UPDATE settings SET \"customOpenAIConfig\" = NULL WHERE id = '1'")
                 .execute(pool)
                 .await?;
             return Ok(());
@@ -249,7 +242,7 @@ impl SettingsRepository {
             "groq" => "groqApiKey",
             "claude" => "anthropicApiKey",
             "openrouter" => "openRouterApiKey",
-            "builtin-ai" => return Ok(()), // No API key needed
+            "builtin-ai" => return Ok(()),
             _ => {
                 return Err(sqlx::Error::Protocol(
                     format!("Invalid provider: {}", provider).into(),
@@ -258,7 +251,7 @@ impl SettingsRepository {
         };
 
         let query = format!(
-            "UPDATE settings SET {} = NULL WHERE id = '1'",
+            "UPDATE settings SET \"{}\" = NULL WHERE id = '1'",
             api_key_column
         );
         sqlx::query(&query).execute(pool).await?;
@@ -266,22 +259,14 @@ impl SettingsRepository {
         Ok(())
     }
 
-    // ===== CUSTOM OPENAI CONFIG METHODS =====
-
-    /// Gets the custom OpenAI configuration from JSON
-    ///
-    /// # Returns
-    /// * `Ok(Some(CustomOpenAIConfig))` - Config exists and is valid JSON
-    /// * `Ok(None)` - No config stored
-    /// * `Err(sqlx::Error)` - Database error
     pub async fn get_custom_openai_config(
-        pool: &SqlitePool,
+        pool: &PgPool,
     ) -> std::result::Result<Option<CustomOpenAIConfig>, sqlx::Error> {
         use sqlx::Row;
 
         let row = sqlx::query(
             r#"
-            SELECT customOpenAIConfig
+            SELECT "customOpenAIConfig"
             FROM settings
             WHERE id = '1'
             LIMIT 1
@@ -295,7 +280,6 @@ impl SettingsRepository {
                 let config_json: Option<String> = record.get("customOpenAIConfig");
 
                 if let Some(json) = config_json {
-                    // Parse JSON into CustomOpenAIConfig
                     let config: CustomOpenAIConfig = serde_json::from_str(&json)
                         .map_err(|e| sqlx::Error::Protocol(
                             format!("Invalid JSON in customOpenAIConfig: {}", e).into()
@@ -310,32 +294,21 @@ impl SettingsRepository {
         }
     }
 
-    /// Saves the custom OpenAI configuration as JSON
-    ///
-    /// # Arguments
-    /// * `pool` - Database connection pool
-    /// * `config` - CustomOpenAIConfig to save (includes endpoint, apiKey, model, maxTokens, temperature, topP)
-    ///
-    /// # Returns
-    /// * `Ok(())` - Config saved successfully
-    /// * `Err(sqlx::Error)` - Database or JSON serialization error
     pub async fn save_custom_openai_config(
-        pool: &SqlitePool,
+        pool: &PgPool,
         config: &CustomOpenAIConfig,
     ) -> std::result::Result<(), sqlx::Error> {
-        // Serialize config to JSON
         let config_json = serde_json::to_string(config)
             .map_err(|e| sqlx::Error::Protocol(
                 format!("Failed to serialize config to JSON: {}", e).into()
             ))?;
 
-        // Upsert into settings table
         sqlx::query(
             r#"
-            INSERT INTO settings (id, provider, model, whisperModel, customOpenAIConfig)
+            INSERT INTO settings (id, provider, model, "whisperModel", "customOpenAIConfig")
             VALUES ('1', 'custom-openai', $1, 'large-v3', $2)
-            ON CONFLICT(id) DO UPDATE SET
-                customOpenAIConfig = excluded.customOpenAIConfig
+            ON CONFLICT (id) DO UPDATE SET
+                "customOpenAIConfig" = EXCLUDED."customOpenAIConfig"
             "#,
         )
         .bind(&config.model)

@@ -208,7 +208,7 @@ pub async fn api_detect_transcript_summary_language(
 }
 
 async fn resolve_meeting_folder(
-    pool: &sqlx::SqlitePool,
+    pool: &sqlx::PgPool,
     meeting_id: &str,
 ) -> Result<MeetingFolderResolution, String> {
     let meeting = MeetingsRepository::get_meeting_metadata(pool, meeting_id)

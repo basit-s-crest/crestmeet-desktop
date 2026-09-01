@@ -10,7 +10,7 @@ use crate::summary::processor::{
 use crate::summary::templates::{self, Template};
 use crate::ollama::metadata::ModelMetadataCache;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -226,7 +226,7 @@ impl SummaryService {
     }
 
     async fn read_detected_summary_language(
-        pool: &SqlitePool,
+        pool: &PgPool,
         meeting_id: &str,
     ) -> Option<String> {
         let meeting = match MeetingsRepository::get_meeting_metadata(pool, meeting_id).await {
@@ -293,7 +293,7 @@ impl SummaryService {
     /// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
     pub async fn process_transcript_background<R: tauri::Runtime>(
         _app: AppHandle<R>,
-        pool: SqlitePool,
+        pool: PgPool,
         meeting_id: String,
         text: String,
         model_provider: String,
@@ -602,7 +602,7 @@ impl SummaryService {
     /// * `pool` - SQLx connection pool
     /// * `meeting_id` - Meeting identifier
     /// * `error_msg` - Error message to store
-    async fn update_process_failed(pool: &SqlitePool, meeting_id: &str, error_msg: &str) {
+    async fn update_process_failed(pool: &PgPool, meeting_id: &str, error_msg: &str) {
         error!(
             "Processing failed for meeting_id {}: {}",
             meeting_id, error_msg

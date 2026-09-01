@@ -135,10 +135,23 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
                 }
             }
         }
+        "deepgram" => {
+            info!("🔍 Validating Deepgram API configuration...");
+            let api_key = config.api_key.filter(|k| !k.trim().is_empty());
+            if api_key.is_none() {
+                warn!("❌ Deepgram API key is missing");
+                return Err(
+                    "Deepgram API key is missing. Please enter your Deepgram API key in Settings -> Transcription."
+                        .to_string(),
+                );
+            }
+            info!("✅ Deepgram API key is configured and ready");
+            Ok(())
+        }
         other => {
-            warn!("❌ Unsupported transcription provider for local recording: {}", other);
+            warn!("❌ Unsupported transcription provider for recording: {}", other);
             Err(format!(
-                "Provider '{}' is not supported for local transcription. Please select 'localWhisper' or 'parakeet'.",
+                "Provider '{}' is not supported. Please select 'parakeet', 'localWhisper', or 'deepgram'.",
                 other
             ))
         }
@@ -211,6 +224,20 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
                     Err("Parakeet engine not initialized. This should not happen after validation.".to_string())
                 }
             }
+        }
+        "deepgram" => {
+            info!("☁️ Initializing Deepgram transcription engine");
+            let api_key = config.api_key.unwrap_or_default();
+            if api_key.trim().is_empty() {
+                return Err("Deepgram API key is missing. Please set it in Settings -> Transcription.".to_string());
+            }
+            let model = if config.model.trim().is_empty() {
+                "nova-2".to_string()
+            } else {
+                config.model
+            };
+            let provider = Arc::new(crate::deepgram::DeepgramProvider::new(api_key, Some(model)));
+            Ok(TranscriptionEngine::Provider(provider))
         }
         "localWhisper" | _ => {
             info!("🎤 Initializing Whisper transcription engine");

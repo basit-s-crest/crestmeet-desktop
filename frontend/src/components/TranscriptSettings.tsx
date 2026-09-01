@@ -4,7 +4,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from './ui/input';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
-import { Eye, EyeOff, Lock, Unlock } from 'lucide-react';
+import { Eye, EyeOff, Lock, Unlock, Check, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { ModelManager } from './WhisperModelManager';
 import { ParakeetModelManager } from './ParakeetModelManager';
 
@@ -26,6 +27,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const [showApiKey, setShowApiKey] = useState<boolean>(false);
     const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(true);
     const [isLockButtonVibrating, setIsLockButtonVibrating] = useState<boolean>(false);
+    const [isSaving, setIsSaving] = useState<boolean>(false);
     const [uiProvider, setUiProvider] = useState<TranscriptModelProps['provider']>(transcriptModelConfig.provider);
 
     // Sync uiProvider when backend config changes (e.g., after model selection or initial load)
@@ -41,9 +43,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
 
     const fetchApiKey = async (provider: string) => {
         try {
-
             const data = await invoke('api_get_transcript_api_key', { provider }) as string;
-
             setApiKey(data || '');
         } catch (err) {
             console.error('Error fetching API key:', err);
@@ -53,7 +53,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
     const modelOptions = {
         localWhisper: [], // Model selection handled by ModelManager component
         parakeet: [], // Model selection handled by ParakeetModelManager component
-        deepgram: ['nova-2-phonecall'],
+        deepgram: ['nova-2', 'nova-2-general', 'nova-2-meeting', 'nova-2-phonecall'],
         elevenLabs: ['eleven_multilingual_v2'],
         groq: ['llama-3.3-70b-versatile'],
         openai: ['gpt-4o'],
@@ -95,6 +95,37 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
         }
     };
 
+    const handleSaveConfig = async () => {
+        setIsSaving(true);
+        try {
+            const modelToSave = (uiProvider === 'deepgram' && (!transcriptModelConfig.model || !modelOptions.deepgram.includes(transcriptModelConfig.model)))
+                ? 'nova-2'
+                : (transcriptModelConfig.model || 'nova-2');
+
+            await invoke('api_save_transcript_config', {
+                provider: uiProvider,
+                model: modelToSave,
+                apiKey: apiKey,
+                authToken: null,
+            });
+
+            setTranscriptModelConfig({
+                ...transcriptModelConfig,
+                provider: uiProvider,
+                model: modelToSave,
+                apiKey: apiKey,
+            });
+
+            setIsApiKeyLocked(true);
+            toast.success(`${uiProvider === 'deepgram' ? 'Deepgram' : uiProvider} settings saved successfully!`);
+        } catch (error) {
+            console.error('Failed to save transcript config:', error);
+            toast.error('Failed to save transcription settings');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
     return (
         <div>
             <div>
@@ -112,6 +143,15 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                 onValueChange={(value) => {
                                     const provider = value as TranscriptModelProps['provider'];
                                     setUiProvider(provider);
+                                    if (provider === 'deepgram') {
+                                        const currentModel = transcriptModelConfig.model;
+                                        const defaultModel = modelOptions.deepgram.includes(currentModel) ? currentModel : 'nova-2';
+                                        setTranscriptModelConfig({
+                                            ...transcriptModelConfig,
+                                            provider: 'deepgram',
+                                            model: defaultModel,
+                                        });
+                                    }
                                     if (provider !== 'localWhisper' && provider !== 'parakeet') {
                                         fetchApiKey(provider);
                                     }
@@ -121,10 +161,10 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                     <SelectValue placeholder="Select provider" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="parakeet">⚡ Parakeet (Recommended - Real-time / Accurate)</SelectItem>
-                                    <SelectItem value="localWhisper">🏠 Local Whisper (High Accuracy)</SelectItem>
-                                    {/* <SelectItem value="deepgram">☁️ Deepgram (Backup)</SelectItem>
-                                    <SelectItem value="elevenLabs">☁️ ElevenLabs</SelectItem>
+                                    <SelectItem value="deepgram">☁️ Deepgram (Nova-2 Fast Cloud - Recommended)</SelectItem>
+                                    <SelectItem value="parakeet">⚡ Parakeet (Local - Real-time / Accurate)</SelectItem>
+                                    <SelectItem value="localWhisper">🏠 Local Whisper (Local - High Accuracy)</SelectItem>
+                                    {/* <SelectItem value="elevenLabs">☁️ ElevenLabs</SelectItem>
                                     <SelectItem value="groq">☁️ Groq</SelectItem>
                                     <SelectItem value="openai">☁️ OpenAI</SelectItem> */}
                                 </SelectContent>
@@ -132,7 +172,7 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
 
                             {uiProvider !== 'localWhisper' && uiProvider !== 'parakeet' && (
                                 <Select
-                                    value={transcriptModelConfig.model}
+                                    value={transcriptModelConfig.model || (uiProvider === 'deepgram' ? 'nova-2' : '')}
                                     onValueChange={(value) => {
                                         const model = value as TranscriptModelProps['model'];
                                         setTranscriptModelConfig({ ...transcriptModelConfig, provider: uiProvider, model });
@@ -174,54 +214,81 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
 
 
                     {requiresApiKey && (
-                        <div>
-                            <Label className="block text-sm font-medium text-gray-700 mb-1">
-                                API Key
-                            </Label>
-                            <div className="relative mx-1">
-                                <Input
-                                    type={showApiKey ? "text" : "password"}
-                                    className={`pr-24 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 ${isApiKeyLocked ? 'bg-gray-100 cursor-not-allowed' : ''
-                                        }`}
-                                    value={apiKey || ''}
-                                    onChange={(e) => setApiKey(e.target.value)}
-                                    disabled={isApiKeyLocked}
-                                    onClick={handleInputClick}
-                                    placeholder="Enter your API key"
-                                />
-                                {isApiKeyLocked && (
-                                    <div
-                                        onClick={handleInputClick}
-                                        className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-50 rounded-md cursor-not-allowed"
-                                    />
-                                )}
-                                <div className="absolute inset-y-0 right-0 pr-1 flex items-center">
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        onClick={() => setIsApiKeyLocked(!isApiKeyLocked)}
-                                        className={`transition-colors duration-200 ${isLockButtonVibrating ? 'animate-vibrate text-red-500' : ''
+                        <div className="space-y-3 pt-2">
+                            <div>
+                                <Label className="block text-sm font-medium text-gray-700 mb-1">
+                                    {uiProvider === 'deepgram' ? 'Deepgram API Key' : 'API Key'}
+                                </Label>
+                                <div className="relative mx-1">
+                                    <Input
+                                        type={showApiKey ? "text" : "password"}
+                                        className={`pr-24 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 ${isApiKeyLocked ? 'bg-gray-100 cursor-not-allowed' : ''
                                             }`}
-                                        title={isApiKeyLocked ? "Unlock to edit" : "Lock to prevent editing"}
-                                    >
-                                        {isApiKeyLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        onClick={() => setShowApiKey(!showApiKey)}
-                                    >
-                                        {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                                    </Button>
+                                        value={apiKey || ''}
+                                        onChange={(e) => setApiKey(e.target.value)}
+                                        disabled={isApiKeyLocked}
+                                        onClick={handleInputClick}
+                                        placeholder={uiProvider === 'deepgram' ? "Enter your Deepgram API key" : "Enter your API key"}
+                                    />
+                                    {isApiKeyLocked && (
+                                        <div
+                                            onClick={handleInputClick}
+                                            className="absolute inset-0 flex items-center justify-center bg-gray-100 bg-opacity-50 rounded-md cursor-not-allowed"
+                                        />
+                                    )}
+                                    <div className="absolute inset-y-0 right-0 pr-1 flex items-center">
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => setIsApiKeyLocked(!isApiKeyLocked)}
+                                            className={`transition-colors duration-200 ${isLockButtonVibrating ? 'animate-vibrate text-red-500' : ''
+                                                }`}
+                                            title={isApiKeyLocked ? "Unlock to edit" : "Lock to prevent editing"}
+                                        >
+                                            {isApiKeyLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => setShowApiKey(!showApiKey)}
+                                        >
+                                            {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                        </Button>
+                                    </div>
                                 </div>
+                                {uiProvider === 'deepgram' && (
+                                    <p className="text-xs text-gray-500 mt-1 mx-1">
+                                        Get a free API key with $200 in free credit at <a href="https://console.deepgram.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">deepgram.com</a>.
+                                    </p>
+                                )}
+                            </div>
+
+                            <div className="mx-1 pt-1">
+                                <Button
+                                    onClick={handleSaveConfig}
+                                    disabled={isSaving || !apiKey || apiKey.trim().length === 0}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center gap-2"
+                                >
+                                    {isSaving ? (
+                                        <>
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                            <span>Saving...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Check className="w-4 h-4" />
+                                            <span>Save Transcription Settings</span>
+                                        </>
+                                    )}
+                                </Button>
                             </div>
                         </div>
                     )}
                 </div>
             </div>
-        </div >
+        </div>
     )
 }
 

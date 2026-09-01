@@ -36,6 +36,9 @@ graph TD
 
 *   **Tauri Core:** The heart of the application, responsible for managing the window, handling events, and exposing the Rust core to the frontend.
 *   **Audio Engine:** Captures audio from the microphone and system, processes it, and prepares it for transcription.
-*   **Transcription Engine:** Uses local speech-to-text models (Whisper or Parakeet) to transcribe the captured audio. It can be accelerated with a GPU.
 *   **Database:** A local SQLite database that stores meeting metadata, transcripts, and summaries.
 *   **Summary Engine:** Generates meeting summaries using various Large Language Models (LLMs), including local models via Ollama.
+
+## Detailed Architecture & Data Flows
+
+For full details on data flows, audio pipeline mixing, SQLite database models, IPC commands, and developer guides, see [README_PROJECT_OVERVIEW.md](file:///c:/Projects-Crest/meetily/README_PROJECT_OVERVIEW.md).

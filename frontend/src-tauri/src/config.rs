@@ -34,3 +34,13 @@ pub const WHISPER_MODEL_CATALOG: &[(&str, &str, u32, &str, &str, &str)] = &[
     ("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 547, "High", "Medium", "Quantized large model, best balance"),
     ("large-v3-q5_0", "ggml-large-v3-q5_0.bin", 1031, "High", "Slow", "Quantized large model, high accuracy"),
 ];
+
+/// Default Supabase PostgreSQL connection string (Transaction Pooler - IPv4 compatible)
+pub const DEFAULT_SUPABASE_DATABASE_URL: &str =
+    "postgresql://postgres.yjqcxafjooyqfolnylwp:3t%5EQ9%21D-Ku%25t8uJ@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres";
+
+pub fn get_database_url() -> String {
+    std::env::var("DATABASE_URL")
+        .or_else(|_| std::env::var("SUPABASE_DB_URL"))
+        .unwrap_or_else(|_| DEFAULT_SUPABASE_DATABASE_URL.to_string())
+}

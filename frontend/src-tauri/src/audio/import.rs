@@ -370,6 +370,90 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Import cancelled"));
     }
 
+    // Deepgram cloud path - transcribes entire audio file in one shot with diarization
+    if provider.as_deref() == Some("deepgram") {
+        info!("Using Deepgram cloud engine for audio import");
+        emit_progress(&app, "transcribing", 20, "Connecting to Deepgram...");
+
+        let app_state = app
+            .try_state::<AppState>()
+            .ok_or_else(|| anyhow!("App state not available"))?;
+        let pool = app_state.db_manager.pool();
+        let api_key = match crate::database::repositories::setting::SettingsRepository::get_transcript_api_key(pool, "deepgram").await {
+            Ok(Some(k)) if !k.trim().is_empty() => k,
+            _ => {
+                let _ = std::fs::remove_dir_all(&meeting_folder);
+                return Err(anyhow!("Deepgram API key is missing. Please enter your API key in Settings -> Transcription."));
+            }
+        };
+
+        if IMPORT_CANCELLED.load(Ordering::SeqCst) {
+            let _ = std::fs::remove_dir_all(&meeting_folder);
+            return Err(anyhow!("Import cancelled"));
+        }
+
+        emit_progress(&app, "transcribing", 40, "Sending audio file to Deepgram...");
+        let client = crate::deepgram::DeepgramClient::new(api_key, model.clone());
+        let deepgram_segments = match client.transcribe_file(&dest_path, language.as_deref(), true).await {
+            Ok(segs) => segs,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&meeting_folder);
+                return Err(e);
+            }
+        };
+
+        if IMPORT_CANCELLED.load(Ordering::SeqCst) {
+            let _ = std::fs::remove_dir_all(&meeting_folder);
+            return Err(anyhow!("Import cancelled"));
+        }
+
+        emit_progress(&app, "saving", 85, "Creating meeting...");
+        let segments: Vec<TranscriptSegment> = deepgram_segments
+            .into_iter()
+            .map(|ds| {
+                let display_text = if let Some(spk) = &ds.speaker {
+                    format!("{}: {}", spk, ds.transcript)
+                } else {
+                    ds.transcript
+                };
+                let minutes = (ds.audio_start_time / 60.0).floor() as u32;
+                let secs = (ds.audio_start_time % 60.0).floor() as u32;
+                let timestamp_str = format!("{:02}:{:02}", minutes, secs);
+
+                TranscriptSegment {
+                    id: format!("transcript-{}", Uuid::new_v4()),
+                    text: display_text,
+                    timestamp: timestamp_str,
+                    audio_start_time: Some(ds.audio_start_time),
+                    audio_end_time: Some(ds.audio_end_time),
+                    duration: Some(ds.duration),
+                }
+            })
+            .collect();
+
+        let meeting_id = create_meeting_with_transcripts(
+            pool,
+            &title,
+            &segments,
+            meeting_folder.to_string_lossy().to_string(),
+        )
+        .await?;
+
+        emit_progress(&app, "saving", 90, "Writing transcript files...");
+        let transcripts_path = meeting_folder.join("transcripts.json");
+        let _ = write_transcripts_json(&transcripts_path, &segments);
+
+        emit_progress(&app, "saving", 100, "Import complete!");
+
+        let duration_seconds = segments.last().and_then(|s| s.audio_end_time).unwrap_or(0.0);
+        return Ok(ImportResult {
+            meeting_id,
+            title,
+            segments_count: segments.len(),
+            duration_seconds,
+        });
+    }
+
     emit_progress(&app, "decoding", 15, "Decoding audio file...");
 
     // Decode the audio file with progress updates
@@ -688,7 +772,7 @@ fn emit_progress<R: Runtime>(app: &AppHandle<R>, stage: &str, progress: u32, mes
 
 /// Create a new meeting with transcripts in the database
 async fn create_meeting_with_transcripts(
-    pool: &sqlx::SqlitePool,
+    pool: &sqlx::PgPool,
     title: &str,
     segments: &[TranscriptSegment],
     folder_path: String,
@@ -705,7 +789,7 @@ async fn create_meeting_with_transcripts(
     // Insert meeting
     sqlx::query(
         "INSERT INTO meetings (id, title, created_at, updated_at, folder_path)
-         VALUES (?, ?, ?, ?, ?)",
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(&meeting_id)
     .bind(title)
@@ -720,7 +804,7 @@ async fn create_meeting_with_transcripts(
     for segment in segments {
         sqlx::query(
             "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&segment.id)
         .bind(&meeting_id)

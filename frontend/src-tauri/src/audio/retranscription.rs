@@ -4,10 +4,12 @@ use crate::audio::decoder::decode_audio_file;
 use crate::audio::vad::get_speech_chunks_with_progress;
 use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
+use crate::api::TranscriptSegment;
 use crate::config::{DEFAULT_WHISPER_MODEL, DEFAULT_PARAKEET_MODEL};
 use crate::parakeet_engine::ParakeetEngine;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
+use uuid::Uuid;
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -182,11 +184,114 @@ async fn run_retranscription<R: Runtime>(
 
     // Determine which provider to use (default to whisper)
     let use_parakeet = provider.as_deref() == Some("parakeet");
+    let use_deepgram = provider.as_deref() == Some("deepgram");
 
     info!(
         "Starting retranscription for meeting {} with language {:?}, model {:?}, provider {:?}",
         meeting_id, language, model, provider
     );
+
+    // Deepgram cloud path - transcribes entire audio file in one shot with diarization
+    if use_deepgram {
+        info!("Using Deepgram cloud engine for whole-meeting retranscription");
+        emit_progress(&app, &meeting_id, "transcribing", 15, "Connecting to Deepgram...");
+
+        let app_state = app
+            .try_state::<AppState>()
+            .ok_or_else(|| anyhow!("App state not available"))?;
+        let pool = app_state.db_manager.pool();
+        let api_key = match crate::database::repositories::setting::SettingsRepository::get_transcript_api_key(pool, "deepgram").await {
+            Ok(Some(k)) if !k.trim().is_empty() => k,
+            _ => return Err(anyhow!("Deepgram API key is missing. Please enter your API key in Settings -> Transcription.")),
+        };
+
+        if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
+            return Err(anyhow!("Retranscription cancelled"));
+        }
+
+        emit_progress(&app, &meeting_id, "transcribing", 35, "Sending audio file to Deepgram...");
+        let client = crate::deepgram::DeepgramClient::new(api_key, model.clone());
+        let deepgram_segments = client.transcribe_file(&audio_path, language.as_deref(), true).await?;
+
+        if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
+            return Err(anyhow!("Retranscription cancelled"));
+        }
+
+        emit_progress(&app, &meeting_id, "saving", 85, "Saving transcripts...");
+        let segments: Vec<TranscriptSegment> = deepgram_segments
+            .into_iter()
+            .map(|ds| {
+                let display_text = if let Some(spk) = &ds.speaker {
+                    format!("{}: {}", spk, ds.transcript)
+                } else {
+                    ds.transcript
+                };
+                let minutes = (ds.audio_start_time / 60.0).floor() as u32;
+                let secs = (ds.audio_start_time % 60.0).floor() as u32;
+                let timestamp_str = format!("{:02}:{:02}", minutes, secs);
+
+                TranscriptSegment {
+                    id: format!("transcript-{}", Uuid::new_v4()),
+                    text: display_text,
+                    timestamp: timestamp_str,
+                    audio_start_time: Some(ds.audio_start_time),
+                    audio_end_time: Some(ds.audio_end_time),
+                    duration: Some(ds.duration),
+                }
+            })
+            .collect();
+
+        let mut conn = pool.acquire().await.map_err(|e| anyhow!("DB error: {}", e))?;
+        let mut tx = sqlx::Connection::begin(&mut *conn)
+            .await
+            .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
+
+        sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
+            .bind(&meeting_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
+
+        for segment in &segments {
+            sqlx::query(
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)"
+            )
+            .bind(&segment.id)
+            .bind(&meeting_id)
+            .bind(&segment.text)
+            .bind(&segment.timestamp)
+            .bind(segment.audio_start_time)
+            .bind(segment.audio_end_time)
+            .bind(segment.duration)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow!("Failed to insert transcript segment: {}", e))?;
+        }
+
+        sqlx::query("UPDATE meetings SET updated_at = ? WHERE id = ?")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(&meeting_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow!("Failed to update meeting timestamp: {}", e))?;
+
+        tx.commit().await.map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
+
+        // Write transcripts.json to meeting folder
+        let transcripts_json_path = folder_path.join("transcripts.json");
+        let _ = write_transcripts_json(&transcripts_json_path, &segments);
+
+        emit_progress(&app, &meeting_id, "saving", 100, "Retranscription complete!");
+
+        let duration_seconds = segments.last().and_then(|s| s.audio_end_time).unwrap_or(0.0);
+        return Ok(RetranscriptionResult {
+            meeting_id,
+            segments_count: segments.len(),
+            duration_seconds,
+            language,
+        });
+    }
 
     // Emit progress: decoding
     emit_progress(&app, &meeting_id, "decoding", 5, "Decoding audio file...");
@@ -433,7 +538,7 @@ async fn run_retranscription<R: Runtime>(
         .await
         .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
 
-    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
+    sqlx::query("DELETE FROM transcripts WHERE meeting_id = $1")
         .bind(&meeting_id)
         .execute(&mut *tx)
         .await
@@ -442,7 +547,7 @@ async fn run_retranscription<R: Runtime>(
     for segment in &segments {
         sqlx::query(
             "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7)"
         )
         .bind(&segment.id)
         .bind(&meeting_id)
