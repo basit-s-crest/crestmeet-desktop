@@ -5,7 +5,7 @@
 use crate::audio::transcription::provider::{TranscriptionError, TranscriptionProvider, TranscriptResult};
 use super::client::DeepgramClient;
 use async_trait::async_trait;
-use log::{debug, error, info};
+use log::{debug, error};
 
 pub struct DeepgramProvider {
     client: DeepgramClient,

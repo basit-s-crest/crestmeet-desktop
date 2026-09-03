@@ -19,11 +19,14 @@
 // captures via stable wired path (built-in mic + ScreenCaptureKit from built-in).
 
 use anyhow::Result;
+#[allow(unused_imports)]
 use log::{info, warn};
 
 use super::configuration::AudioDevice;
+#[allow(unused_imports)]
 use super::microphone::{default_input_device, find_builtin_input_device};
 use super::speakers::default_output_device;
+#[allow(unused_imports)]
 use crate::audio::device_detection::InputDeviceKind;
 
 /// Get safe recording devices with automatic Bluetooth fallback (macOS-specific)

@@ -19,6 +19,7 @@ interface UseRecordingStartReturn {
  * Handles both manual start (button click) and auto-start (from sidebar navigation).
  *
  * Features:
+ * - Validates cloud transcription configuration (Deepgram API key)
  * - Meeting title generation (format: Meeting DD_MM_YY_HH_MM_SS)
  * - Transcript clearing on start
  * - Analytics tracking
@@ -28,7 +29,7 @@ interface UseRecordingStartReturn {
 export function useRecordingStart(
   isRecording: boolean,
   setIsRecording: (value: boolean) => void,
-  showModal?: (name: 'modelSelector', message?: string) => void
+  showModal?: (name: any, message?: string) => void
 ): UseRecordingStartReturn {
   const [isAutoStarting, setIsAutoStarting] = useState(false);
 
@@ -49,64 +50,43 @@ export function useRecordingStart(
     return `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
   }, []);
 
-  // Check if Parakeet transcription model is ready
-  const checkParakeetReady = useCallback(async (): Promise<boolean> => {
+  // Validate transcription configuration (Deepgram API key)
+  const checkTranscriptionReady = useCallback(async (): Promise<boolean> => {
     try {
-      await invoke('parakeet_init');
-      const hasModels = await invoke<boolean>('parakeet_has_available_models');
-      return hasModels;
-    } catch (error) {
-      console.error('Failed to check Parakeet status:', error);
-      return false;
-    }
-  }, []);
+      const config = await invoke<{ provider: string; model: string; api_key?: string } | null>('api_get_transcript_config');
+      const provider = config?.provider || 'deepgram';
+      const apiKey = config?.api_key?.trim();
 
-  // Check if any model is currently downloading
-  const checkIfModelDownloading = useCallback(async (): Promise<boolean> => {
-    try {
-      const models = await invoke<any[]>('parakeet_get_available_models');
-      const isDownloading = models.some(m =>
-        m.status && (
-          typeof m.status === 'object'
-            ? 'Downloading' in m.status
-            : m.status === 'Downloading'
-        )
-      );
-      return isDownloading;
+      if (provider === 'deepgram' && !apiKey) {
+        toast.error('Deepgram API Key Required', {
+          description: 'Please enter your Deepgram API Key in Settings to start recording.',
+          duration: 6000,
+        });
+        showModal?.('modelSettings', 'deepgram');
+        Analytics.trackButtonClick('start_recording_blocked_missing_api_key', 'home_page');
+        return false;
+      }
+
+      return true;
     } catch (error) {
-      console.error('Failed to check model download status:', error);
-      return false; // Default to not downloading (will show error + modal)
+      console.error('Failed to validate transcription config:', error);
+      return true;
     }
-  }, []);
+  }, [showModal]);
 
   // Handle manual recording start (from button click)
   const handleRecordingStart = useCallback(async () => {
     try {
-      console.log('handleRecordingStart called - checking Parakeet model status');
+      console.log('handleRecordingStart called - validating transcription provider');
 
-      // Check if Parakeet transcription model is ready before starting
-      const parakeetReady = await checkParakeetReady();
-      if (!parakeetReady) {
-        const isDownloading = await checkIfModelDownloading();
-        if (isDownloading) {
-          toast.info('Model download in progress', {
-            description: 'Please wait for the transcription model to finish downloading before recording.',
-            duration: 5000,
-          });
-          Analytics.trackButtonClick('start_recording_blocked_downloading', 'home_page');
-        } else {
-          toast.error('Transcription model not ready', {
-            description: 'Please download a transcription model before recording.',
-            duration: 5000,
-          });
-          showModal?.('modelSelector', 'Transcription model setup required');
-          Analytics.trackButtonClick('start_recording_blocked_missing', 'home_page');
-        }
+      // Check if Deepgram / transcription provider is configured
+      const isReady = await checkTranscriptionReady();
+      if (!isReady) {
         setStatus(RecordingStatus.IDLE);
         return;
       }
 
-      console.log('Parakeet ready - setting up meeting title and state');
+      console.log('Transcription ready - setting up meeting title and state');
 
       const randomTitle = generateMeetingTitle();
       setMeetingTitle(randomTitle);
@@ -123,11 +103,8 @@ export function useRecordingStart(
       );
       console.log('Backend recording started successfully');
 
-      // Update state after successful backend start
-      // Note: RECORDING status will be set by RecordingStateContext event listener
-      console.log('Setting isRecordingState to true');
-      setIsRecording(true); // This will also update the sidebar via the useEffect
-      clearTranscripts(); // Clear previous transcripts when starting new recording
+      setIsRecording(true);
+      clearTranscripts();
       setIsMeetingActive(true);
       Analytics.trackButtonClick('start_recording', 'home_page');
 
@@ -136,12 +113,11 @@ export function useRecordingStart(
     } catch (error) {
       console.error('Failed to start recording:', error);
       setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Failed to start recording');
-      setIsRecording(false); // Reset state on error
+      setIsRecording(false);
       Analytics.trackButtonClick('start_recording_error', 'home_page');
-      // Re-throw so RecordingControls can handle device-specific errors
       throw error;
     }
-  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkParakeetReady, checkIfModelDownloading, selectedDevices, showModal, setStatus]);
+  }, [generateMeetingTitle, setMeetingTitle, setIsRecording, clearTranscripts, setIsMeetingActive, checkTranscriptionReady, selectedDevices, setStatus]);
 
   // Check for autoStartRecording flag and start recording automatically
   useEffect(() => {
@@ -151,37 +127,17 @@ export function useRecordingStart(
         if (shouldAutoStart === 'true' && !isRecording && !isAutoStarting) {
           console.log('Auto-starting recording from navigation...');
           setIsAutoStarting(true);
-          sessionStorage.removeItem('autoStartRecording'); // Clear the flag
+          sessionStorage.removeItem('autoStartRecording');
 
-          // Check if Parakeet transcription model is ready before starting
-          const parakeetReady = await checkParakeetReady();
-          if (!parakeetReady) {
-            const isDownloading = await checkIfModelDownloading();
-            if (isDownloading) {
-              toast.info('Model download in progress', {
-                description: 'Please wait for the transcription model to finish downloading before recording.',
-                duration: 5000,
-              });
-              Analytics.trackButtonClick('start_recording_blocked_downloading', 'sidebar_auto');
-            } else {
-              toast.error('Transcription model not ready', {
-                description: 'Please download a transcription model before recording.',
-                duration: 5000,
-              });
-              showModal?.('modelSelector', 'Transcription model setup required');
-              Analytics.trackButtonClick('start_recording_blocked_missing', 'sidebar_auto');
-            }
+          const isReady = await checkTranscriptionReady();
+          if (!isReady) {
             setStatus(RecordingStatus.IDLE);
             setIsAutoStarting(false);
             return;
           }
 
-          // Start the actual backend recording
           try {
-            // Generate meeting title
             const generatedMeetingTitle = generateMeetingTitle();
-
-            // Set STARTING status before initiating backend recording
             setStatus(RecordingStatus.STARTING, 'Initializing recording...');
 
             console.log('Auto-starting backend recording with meeting:', generatedMeetingTitle);
@@ -192,15 +148,12 @@ export function useRecordingStart(
             );
             console.log('Auto-start backend recording result:', result);
 
-            // Update UI state after successful backend start
-            // Note: RECORDING status will be set by RecordingStateContext event listener
             setMeetingTitle(generatedMeetingTitle);
             setIsRecording(true);
             clearTranscripts();
             setIsMeetingActive(true);
             Analytics.trackButtonClick('start_recording', 'sidebar_auto');
 
-            // Show recording notification if enabled
             await showRecordingNotification();
           } catch (error) {
             console.error('Failed to auto-start recording:', error);
@@ -224,9 +177,7 @@ export function useRecordingStart(
     setIsRecording,
     clearTranscripts,
     setIsMeetingActive,
-    checkParakeetReady,
-    checkIfModelDownloading,
-    showModal,
+    checkTranscriptionReady,
     setStatus,
   ]);
 
@@ -238,37 +189,18 @@ export function useRecordingStart(
         return;
       }
 
-      console.log('Direct start from sidebar - checking Parakeet model status');
+      console.log('Direct start from sidebar - validating transcription provider');
       setIsAutoStarting(true);
 
-      // Check if Parakeet transcription model is ready before starting
-      const parakeetReady = await checkParakeetReady();
-      if (!parakeetReady) {
-        const isDownloading = await checkIfModelDownloading();
-        if (isDownloading) {
-          toast.info('Model download in progress', {
-            description: 'Please wait for the transcription model to finish downloading before recording.',
-            duration: 5000,
-          });
-          Analytics.trackButtonClick('start_recording_blocked_downloading', 'sidebar_direct');
-        } else {
-          toast.error('Transcription model not ready', {
-            description: 'Please download a transcription model before recording.',
-            duration: 5000,
-          });
-          showModal?.('modelSelector', 'Transcription model setup required');
-          Analytics.trackButtonClick('start_recording_blocked_missing', 'sidebar_direct');
-        }
+      const isReady = await checkTranscriptionReady();
+      if (!isReady) {
         setStatus(RecordingStatus.IDLE);
         setIsAutoStarting(false);
         return;
       }
 
       try {
-        // Generate meeting title
         const generatedMeetingTitle = generateMeetingTitle();
-
-        // Set STARTING status before initiating backend recording
         setStatus(RecordingStatus.STARTING, 'Initializing recording...');
 
         console.log('Starting backend recording with meeting:', generatedMeetingTitle);
@@ -279,15 +211,12 @@ export function useRecordingStart(
         );
         console.log('Backend recording result:', result);
 
-        // Update UI state after successful backend start
-        // Note: RECORDING status will be set by RecordingStateContext event listener
         setMeetingTitle(generatedMeetingTitle);
         setIsRecording(true);
         clearTranscripts();
         setIsMeetingActive(true);
         Analytics.trackButtonClick('start_recording', 'sidebar_direct');
 
-        // Show recording notification if enabled
         await showRecordingNotification();
       } catch (error) {
         console.error('Failed to start recording from sidebar:', error);
@@ -313,9 +242,7 @@ export function useRecordingStart(
     setIsRecording,
     clearTranscripts,
     setIsMeetingActive,
-    checkParakeetReady,
-    checkIfModelDownloading,
-    showModal,
+    checkTranscriptionReady,
     setStatus,
   ]);
 

@@ -152,12 +152,12 @@ pub async fn import_and_initialize_database(
         legacy_db_path
     );
 
-    // Import and get initialized manager
-    let db_manager = DatabaseManager::import_legacy_database(&app, &legacy_db_path)
+    // Initialize manager
+    let db_manager = DatabaseManager::new_from_app_handle(&app)
         .await
         .map_err(|e| {
-            error!("Failed to import legacy database: {}", e);
-            format!("Failed to import database: {}", e)
+            error!("Failed to initialize database: {}", e);
+            format!("Failed to initialize database: {}", e)
         })?;
 
     // Update app state with the new manager

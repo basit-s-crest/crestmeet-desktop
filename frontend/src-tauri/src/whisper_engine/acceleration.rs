@@ -11,17 +11,7 @@ pub enum WhisperCompiledBackend {
 
 impl WhisperCompiledBackend {
     pub fn current() -> Self {
-        if cfg!(feature = "cuda") {
-            Self::Cuda
-        } else if cfg!(feature = "vulkan") {
-            Self::Vulkan
-        } else if cfg!(feature = "hipblas") {
-            Self::HipBlas
-        } else if cfg!(target_os = "macos") || cfg!(feature = "metal") {
-            Self::Metal
-        } else {
-            Self::Cpu
-        }
+        Self::Cpu
     }
 
     pub fn as_str(self) -> &'static str {

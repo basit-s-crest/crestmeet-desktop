@@ -12,6 +12,17 @@ pub struct DatabaseManager {
 }
 
 impl DatabaseManager {
+    pub fn new_lazy(database_url: &str) -> Result<Self> {
+        log::info!("Initializing Supabase PostgreSQL database pool (non-blocking)...");
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(10)
+            .acquire_timeout(Duration::from_secs(15))
+            .connect_lazy(database_url)?;
+
+        Ok(DatabaseManager { pool })
+    }
+
     pub async fn new(database_url: &str) -> Result<Self> {
         log::info!("Connecting to Supabase PostgreSQL database...");
 
@@ -141,6 +152,11 @@ impl DatabaseManager {
 
         sqlx::raw_sql(schema).execute(pool).await?;
         log::info!("✅ Supabase schema verified");
+        Ok(())
+    }
+
+    pub async fn cleanup(&self) -> Result<()> {
+        self.pool.close().await;
         Ok(())
     }
 }

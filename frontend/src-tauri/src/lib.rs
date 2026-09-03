@@ -4,32 +4,26 @@ use std::sync::Mutex as StdMutex;
 // Removed unused import
 
 // Performance optimization: Conditional logging macros for hot paths
-#[cfg(debug_assertions)]
+#[allow(unused_macros)]
 macro_rules! perf_debug {
     ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
         log::debug!($($arg)*)
     };
 }
 
-#[cfg(not(debug_assertions))]
-macro_rules! perf_debug {
-    ($($arg:tt)*) => {};
-}
-
-#[cfg(debug_assertions)]
+#[allow(unused_macros)]
 macro_rules! perf_trace {
     ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
         log::trace!($($arg)*)
     };
 }
 
-#[cfg(not(debug_assertions))]
-macro_rules! perf_trace {
-    ($($arg:tt)*) => {};
-}
-
 // Make these macros available to other modules
+#[allow(unused_imports)]
 pub(crate) use perf_debug;
+#[allow(unused_imports)]
 pub(crate) use perf_trace;
 
 // Re-export async logging macros for external use (removed due to macro conflicts)
@@ -495,10 +489,11 @@ pub fn run() {
             // }
 
             // Initialize database (handles first launch detection and conditional setup)
-            tauri::async_runtime::block_on(async {
+            if let Err(e) = tauri::async_runtime::block_on(async {
                 database::setup::initialize_database_on_startup(&_app.handle()).await
-            })
-            .expect("Failed to initialize database");
+            }) {
+                log::error!("Database initialization warning: {}", e);
+            }
 
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
