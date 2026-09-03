@@ -25,19 +25,15 @@ export interface TranscriptSettingsProps {
 export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelConfig, onModelSelect }: TranscriptSettingsProps) {
     const [apiKey, setApiKey] = useState<string | null>(transcriptModelConfig.apiKey || null);
     const [showApiKey, setShowApiKey] = useState<boolean>(false);
-    const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(true);
+    const [isApiKeyLocked, setIsApiKeyLocked] = useState<boolean>(Boolean(transcriptModelConfig.apiKey && transcriptModelConfig.apiKey.trim().length > 0));
     const [isLockButtonVibrating, setIsLockButtonVibrating] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState<boolean>(false);
-    const [uiProvider, setUiProvider] = useState<TranscriptModelProps['provider']>(transcriptModelConfig.provider);
+    const [uiProvider, setUiProvider] = useState<TranscriptModelProps['provider']>(transcriptModelConfig.provider || 'deepgram');
 
-    // Sync uiProvider when backend config changes (e.g., after model selection or initial load)
+    // Sync uiProvider when backend config changes
     useEffect(() => {
-        setUiProvider(transcriptModelConfig.provider);
-    }, [transcriptModelConfig.provider]);
-
-    useEffect(() => {
-        if (transcriptModelConfig.provider === 'localWhisper' || transcriptModelConfig.provider === 'parakeet') {
-            setApiKey(null);
+        if (transcriptModelConfig.provider) {
+            setUiProvider(transcriptModelConfig.provider);
         }
     }, [transcriptModelConfig.provider]);
 
@@ -45,25 +41,33 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
         try {
             const data = await invoke('api_get_transcript_api_key', { provider }) as string;
             setApiKey(data || '');
+            setIsApiKeyLocked(Boolean(data && data.trim().length > 0));
         } catch (err) {
             console.error('Error fetching API key:', err);
             setApiKey(null);
+            setIsApiKeyLocked(false);
         }
     };
+
+    useEffect(() => {
+        if (uiProvider === 'deepgram') {
+            fetchApiKey('deepgram');
+        }
+    }, [uiProvider]);
+
     const modelOptions = {
-        localWhisper: [], // Model selection handled by ModelManager component
-        parakeet: [], // Model selection handled by ParakeetModelManager component
+        localWhisper: [],
+        parakeet: [],
         deepgram: ['nova-2', 'nova-2-general', 'nova-2-meeting', 'nova-2-phonecall'],
         elevenLabs: ['eleven_multilingual_v2'],
         groq: ['llama-3.3-70b-versatile'],
         openai: ['gpt-4o'],
     };
-    const requiresApiKey = transcriptModelConfig.provider === 'deepgram' || transcriptModelConfig.provider === 'elevenLabs' || transcriptModelConfig.provider === 'openai' || transcriptModelConfig.provider === 'groq';
+    const requiresApiKey = true;
 
     const handleInputClick = () => {
         if (isApiKeyLocked) {
-            setIsLockButtonVibrating(true);
-            setTimeout(() => setIsLockButtonVibrating(false), 500);
+            setIsApiKeyLocked(false);
         }
     };
 
@@ -118,6 +122,9 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
 
             setIsApiKeyLocked(true);
             toast.success(`${uiProvider === 'deepgram' ? 'Deepgram' : uiProvider} settings saved successfully!`);
+            if (onModelSelect) {
+                onModelSelect();
+            }
         } catch (error) {
             console.error('Failed to save transcript config:', error);
             toast.error('Failed to save transcription settings');
@@ -162,11 +169,6 @@ export function TranscriptSettings({ transcriptModelConfig, setTranscriptModelCo
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="deepgram">☁️ Deepgram (Nova-2 Fast Cloud - Recommended)</SelectItem>
-                                    <SelectItem value="parakeet">⚡ Parakeet (Local - Real-time / Accurate)</SelectItem>
-                                    <SelectItem value="localWhisper">🏠 Local Whisper (Local - High Accuracy)</SelectItem>
-                                    {/* <SelectItem value="elevenLabs">☁️ ElevenLabs</SelectItem>
-                                    <SelectItem value="groq">☁️ Groq</SelectItem>
-                                    <SelectItem value="openai">☁️ OpenAI</SelectItem> */}
                                 </SelectContent>
                             </Select>
 

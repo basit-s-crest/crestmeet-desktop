@@ -1,6 +1,7 @@
 "use client";
 
 import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal';
+import { GroqSummarySettings } from '@/components/GroqSummarySettings';
 import {
   Dialog,
   DialogContent,
@@ -61,6 +62,7 @@ export function SummaryGeneratorButtonGroup({
 }: SummaryGeneratorButtonGroupProps) {
   const [isCheckingModels, setIsCheckingModels] = useState(false);
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+  const [showAdvancedModels, setShowAdvancedModels] = useState(false);
 
   // Expose the function to open the modal via callback registration
   useEffect(() => {
@@ -180,64 +182,58 @@ export function SummaryGeneratorButtonGroup({
     }
   };
 
-  const checkOllamaModelsAndGenerate = async () => {
+  const checkModelAndGenerate = async () => {
+    // If provider is Groq (recommended default), check if API key is present
+    if (modelConfig.provider === 'groq') {
+      try {
+        const key = (await invoke('api_get_api_key', { provider: 'groq' })) as string;
+        if (!key || key.trim().length === 0) {
+          toast.info('Please enter your Groq API key to generate summaries');
+          setShowAdvancedModels(false);
+          setSettingsDialogOpen(true);
+          return;
+        }
+      } catch (err) {
+        console.warn('Could not verify Groq key:', err);
+        setShowAdvancedModels(false);
+        setSettingsDialogOpen(true);
+        return;
+      }
+      onGenerateSummary(customPrompt);
+      return;
+    }
+
     // Handle built-in AI provider
     if (modelConfig.provider === 'builtin-ai') {
       await checkBuiltInAIModelsAndGenerate();
       return;
     }
 
-    // Only check for Ollama provider
-    if (modelConfig.provider !== 'ollama') {
-      onGenerateSummary(customPrompt);
+    // Handle Ollama provider
+    if (modelConfig.provider === 'ollama') {
+      setIsCheckingModels(true);
+      try {
+        const endpoint = modelConfig.ollamaEndpoint || null;
+        const models = await invoke('get_ollama_models', { endpoint }) as any[];
+
+        if (!models || models.length === 0) {
+          toast.error('No Ollama models found. Please configure Groq for instant summaries.');
+          setSettingsDialogOpen(true);
+          return;
+        }
+
+        onGenerateSummary(customPrompt);
+      } catch (error) {
+        toast.error('Ollama is not running. Consider using Groq for instant cloud summaries.');
+        setSettingsDialogOpen(true);
+      } finally {
+        setIsCheckingModels(false);
+      }
       return;
     }
 
-    setIsCheckingModels(true);
-    try {
-      const endpoint = modelConfig.ollamaEndpoint || null;
-      const models = await invoke('get_ollama_models', { endpoint }) as any[];
-
-      if (!models || models.length === 0) {
-        // No models available, show message and open settings
-        toast.error(
-          'No Ollama models found. Please download gemma2:2b from Model Settings.',
-          { duration: 5000 }
-        );
-        setSettingsDialogOpen(true);
-        return;
-      }
-
-      // Models are available, proceed with generation
-      onGenerateSummary(customPrompt);
-    } catch (error) {
-      console.error('Error checking Ollama models:', error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-
-      if (isOllamaNotInstalledError(errorMessage)) {
-        // Ollama is not installed - show specific message with download link
-        toast.error(
-          'Ollama is not installed',
-          {
-            description: 'Please download and install Ollama to use local models.',
-            duration: 7000,
-            action: {
-              label: 'Download',
-              onClick: () => invoke('open_external_url', { url: 'https://ollama.com/download' })
-            }
-          }
-        );
-      } else {
-        // Other error - generic message
-        toast.error(
-          'Failed to check Ollama models. Please check if Ollama is running and download a model.',
-          { duration: 5000 }
-        );
-      }
-      setSettingsDialogOpen(true);
-    } finally {
-      setIsCheckingModels(false);
-    }
+    // Other providers (Claude, OpenAI, OpenRouter)
+    onGenerateSummary(customPrompt);
   };
 
   const isGenerating = summaryStatus === 'processing' || summaryStatus === 'summarizing' || summaryStatus === 'regenerating';
@@ -266,7 +262,7 @@ export function SummaryGeneratorButtonGroup({
           className="bg-gradient-to-r from-blue-50 to-purple-50 hover:from-blue-100 hover:to-purple-100 border-blue-200 xl:px-4"
           onClick={() => {
             Analytics.trackButtonClick('generate_summary', 'meeting_details');
-            checkOllamaModelsAndGenerate();
+            checkModelAndGenerate();
           }}
           disabled={isCheckingModels || isModelConfigLoading}
           title={
@@ -307,20 +303,63 @@ export function SummaryGeneratorButtonGroup({
         </DialogTrigger>
         <DialogContent
           aria-describedby={undefined}
+          className="sm:max-w-[540px] max-h-[90vh] overflow-y-auto"
         >
           <VisuallyHidden>
-            <DialogTitle>Model Settings</DialogTitle>
+            <DialogTitle>Summary Model Settings</DialogTitle>
           </VisuallyHidden>
-          <ModelSettingsModal
-            onSave={async (config) => {
-              await onSaveModelConfig(config);
-              setSettingsDialogOpen(false);
-            }}
-            modelConfig={modelConfig}
-            setModelConfig={setModelConfig}
-            skipInitialFetch={true}
-            layout="dialog"
-          />
+
+          {!showAdvancedModels ? (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b">
+                <h3 className="text-lg font-semibold text-gray-900">AI Summary Setup</h3>
+                <span className="text-xs bg-purple-100 text-purple-800 font-medium px-2 py-0.5 rounded-full">
+                  Fast Cloud Inference
+                </span>
+              </div>
+              <GroqSummarySettings
+                modelConfig={modelConfig}
+                setModelConfig={setModelConfig}
+                onSaveSuccess={() => {
+                  setSettingsDialogOpen(false);
+                }}
+              />
+              <div className="pt-2 border-t text-center">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowAdvancedModels(true)}
+                  className="text-xs text-gray-500 hover:text-gray-800"
+                >
+                  Configure other providers (OpenAI, Claude, Ollama, Custom)...
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b">
+                <h3 className="text-lg font-semibold text-gray-900">All AI Providers</h3>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowAdvancedModels(false)}
+                  className="text-xs"
+                >
+                  ← Back to Groq
+                </Button>
+              </div>
+              <ModelSettingsModal
+                onSave={async (config) => {
+                  await onSaveModelConfig(config);
+                  setSettingsDialogOpen(false);
+                }}
+                modelConfig={modelConfig}
+                setModelConfig={setModelConfig}
+                skipInitialFetch={true}
+                layout="dialog"
+              />
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

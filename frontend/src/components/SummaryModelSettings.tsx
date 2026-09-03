@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal';
+import { GroqSummarySettings } from '@/components/GroqSummarySettings';
 import { SummaryLanguageSettings } from '@/components/SummaryLanguageSettings';
 import { Switch } from './ui/switch';
 import { useConfig } from '@/contexts/ConfigContext';
@@ -142,11 +143,10 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
           Configure the AI model used for generating meeting summaries.
         </p>
 
-        <ModelSettingsModal
+        <GroqSummarySettings
           modelConfig={modelConfig}
           setModelConfig={setModelConfig}
-          onSave={handleSaveModelConfig}
-          skipInitialFetch={true}
+          onSaveSuccess={() => {}}
         />
       </div>
     </div>

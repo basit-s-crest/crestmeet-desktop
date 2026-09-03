@@ -3,7 +3,9 @@
 // Supabase PostgreSQL Database Manager
 
 use crate::config::get_database_url;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Result};
+use std::str::FromStr;
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -15,10 +17,13 @@ impl DatabaseManager {
     pub fn new_lazy(database_url: &str) -> Result<Self> {
         log::info!("Initializing Supabase PostgreSQL database pool (non-blocking)...");
 
-        let pool = sqlx::postgres::PgPoolOptions::new()
+        let connect_options = PgConnectOptions::from_str(database_url)?
+            .statement_cache_capacity(0);
+
+        let pool = PgPoolOptions::new()
             .max_connections(10)
             .acquire_timeout(Duration::from_secs(15))
-            .connect_lazy(database_url)?;
+            .connect_lazy_with(connect_options);
 
         Ok(DatabaseManager { pool })
     }
@@ -26,10 +31,13 @@ impl DatabaseManager {
     pub async fn new(database_url: &str) -> Result<Self> {
         log::info!("Connecting to Supabase PostgreSQL database...");
 
-        let pool = sqlx::postgres::PgPoolOptions::new()
+        let connect_options = PgConnectOptions::from_str(database_url)?
+            .statement_cache_capacity(0);
+
+        let pool = PgPoolOptions::new()
             .max_connections(10)
             .acquire_timeout(Duration::from_secs(15))
-            .connect(database_url)
+            .connect_with(connect_options)
             .await?;
 
         // Initialize schema if not exists

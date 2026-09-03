@@ -63,6 +63,23 @@ pub fn start_transcription_task<R: Runtime>(
             }
         };
 
+        // If Deepgram is configured, stream via persistent WebSocket with KeepAlive heartbeat
+        if let TranscriptionEngine::DeepgramLive { api_key, model } = transcription_engine {
+            info!("🌐 Launching persistent Deepgram WebSocket streaming task");
+            let language = crate::get_language_preference_internal();
+
+            if let Err(e) = crate::deepgram::start_deepgram_live_session(
+                app,
+                api_key,
+                model,
+                language,
+                transcription_receiver,
+            ).await {
+                error!("Deepgram live WebSocket session ended with error: {}", e);
+            }
+            return;
+        }
+
         // Create parallel workers for faster processing while preserving ALL chunks
         const NUM_WORKERS: usize = 1; // Serial processing ensures transcripts emit in chronological order
         let (work_sender, work_receiver) = tokio::sync::mpsc::unbounded_channel::<AudioChunk>();
@@ -82,6 +99,10 @@ pub fn start_transcription_task<R: Runtime>(
                 TranscriptionEngine::Whisper(e) => TranscriptionEngine::Whisper(e.clone()),
                 TranscriptionEngine::Parakeet(e) => TranscriptionEngine::Parakeet(e.clone()),
                 TranscriptionEngine::Provider(p) => TranscriptionEngine::Provider(p.clone()),
+                TranscriptionEngine::DeepgramLive { api_key, model } => TranscriptionEngine::DeepgramLive {
+                    api_key: api_key.clone(),
+                    model: model.clone(),
+                },
             };
             let app_clone = app.clone();
             let work_receiver_clone = work_receiver.clone();
@@ -154,7 +175,7 @@ pub fn start_transcription_task<R: Runtime>(
                                 Ok((transcript, confidence_opt, is_partial)) => {
                                     // Provider-aware confidence threshold
                                     let confidence_threshold = match &engine_clone {
-                                        TranscriptionEngine::Whisper(_) | TranscriptionEngine::Provider(_) => 0.3,
+                                        TranscriptionEngine::Whisper(_) | TranscriptionEngine::Provider(_) | TranscriptionEngine::DeepgramLive { .. } => 0.3,
                                         TranscriptionEngine::Parakeet(_) => 0.0, // Parakeet has no confidence, accept all
                                     };
 
@@ -568,6 +589,9 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                     Err(e)
                 }
             }
+        }
+        TranscriptionEngine::DeepgramLive { .. } => {
+            Ok((String::new(), None, false))
         }
     }
 }

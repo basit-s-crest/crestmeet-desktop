@@ -122,7 +122,7 @@ pub async fn generate_summary(
     max_tokens: Option<u32>,
     temperature: Option<f32>,
     top_p: Option<f32>,
-    app_data_dir: Option<&PathBuf>,
+    _app_data_dir: Option<&PathBuf>,
     cancellation_token: Option<&CancellationToken>,
 ) -> Result<String, String> {
     // Check if cancelled before starting
@@ -132,20 +132,11 @@ pub async fn generate_summary(
         }
     }
 
-    // Handle BuiltInAI provider separately (uses local sidecar, no HTTP API)
+    // Handle BuiltInAI provider
     if provider == &LLMProvider::BuiltInAI {
-        let app_data_dir = app_data_dir
-            .ok_or_else(|| "app_data_dir is required for BuiltInAI provider".to_string())?;
-
-        return crate::summary::summary_engine::generate_with_builtin(
-            app_data_dir,
-            model_name,
-            system_prompt,
-            user_prompt,
-            cancellation_token,
-        )
-        .await
-        .map_err(|e| e.to_string());
+        return Err(
+            "Local Built-in AI models are disabled. Please select a Cloud AI provider (Groq, OpenAI, Claude, or OpenRouter) in Settings -> Summary.".to_string(),
+        );
     }
 
     let (api_url, mut headers) = match provider {

@@ -597,6 +597,31 @@ pub async fn api_get_api_key<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn api_save_api_key<R: Runtime>(
+    _app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+    provider: String,
+    api_key: String,
+    _auth_token: Option<String>,
+) -> Result<serde_json::Value, String> {
+    log_info!(
+        "api_save_api_key called (native) for provider '{}'",
+        &provider
+    );
+    let pool = state.db_manager.pool();
+    match SettingsRepository::save_api_key(pool, &provider, &api_key).await {
+        Ok(_) => {
+            log_info!("Successfully saved API key for provider '{}'", &provider);
+            Ok(serde_json::json!({ "status": "success", "message": "API key saved successfully" }))
+        }
+        Err(e) => {
+            log_error!("Failed to save API key for provider '{}': {}", &provider, e);
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn api_get_transcript_config<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
@@ -1016,7 +1041,7 @@ pub async fn open_meeting_folder<R: Runtime>(
 
     // Get meeting with folder_path
     let meeting: Option<MeetingModel> = sqlx::query_as(
-        "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
+        "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = $1",
     )
     .bind(&meeting_id)
     .fetch_optional(pool)

@@ -634,6 +634,7 @@ pub fn run() {
             api::api_get_model_config,
             api::api_save_model_config,
             api::api_get_api_key,
+            api::api_save_api_key,
             // api::api_get_auto_generate_setting,
             // api::api_save_auto_generate_setting,
             api::api_get_transcript_config,
@@ -682,6 +683,7 @@ pub fn run() {
             audio::recording_preferences::get_default_recordings_folder_path,
             audio::recording_preferences::open_recordings_folder,
             audio::recording_preferences::select_recording_folder,
+            audio::recording_preferences::reset_recording_folder_to_default,
             audio::recording_preferences::get_available_audio_backends,
             audio::recording_preferences::get_current_audio_backend,
             audio::recording_preferences::set_audio_backend,
@@ -766,12 +768,6 @@ pub fn run() {
                             }
                         } else {
                             log::warn!("AppState not available for database cleanup (likely first launch)");
-                        }
-
-                        // Clean up sidecar
-                        log::info!("Cleaning up sidecar...");
-                        if let Err(e) = summary::summary_engine::force_shutdown_sidecar().await {
-                            log::error!("Failed to force shutdown sidecar: {}", e);
                         }
                     });
                     log::info!("Application cleanup complete");

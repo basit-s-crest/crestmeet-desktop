@@ -53,16 +53,16 @@ export function useRecordingStart(
   // Validate transcription configuration (Deepgram API key)
   const checkTranscriptionReady = useCallback(async (): Promise<boolean> => {
     try {
-      const config = await invoke<{ provider: string; model: string; api_key?: string } | null>('api_get_transcript_config');
+      const config = await invoke<{ provider: string; model: string; apiKey?: string; api_key?: string } | null>('api_get_transcript_config');
       const provider = config?.provider || 'deepgram';
-      const apiKey = config?.api_key?.trim();
+      const apiKey = config?.apiKey?.trim() || config?.api_key?.trim();
 
       if (provider === 'deepgram' && !apiKey) {
         toast.error('Deepgram API Key Required', {
           description: 'Please enter your Deepgram API Key in Settings to start recording.',
           duration: 6000,
         });
-        showModal?.('modelSettings', 'deepgram');
+        showModal?.('modelSelector', 'Please enter your Deepgram API Key to enable transcription.');
         Analytics.trackButtonClick('start_recording_blocked_missing_api_key', 'home_page');
         return false;
       }

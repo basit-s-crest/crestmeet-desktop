@@ -2,8 +2,10 @@
 
 import { useEffect, useState, useRef } from "react"
 import { Switch } from "./ui/switch"
-import { FolderOpen } from "lucide-react"
+import { Button } from "./ui/button"
+import { FolderOpen, FolderEdit, RotateCcw } from "lucide-react"
 import { invoke } from "@tauri-apps/api/core"
+import { toast } from "sonner"
 import Analytics from "@/lib/analytics"
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
@@ -133,6 +135,38 @@ export function PreferenceSettings() {
     }
   };
 
+  const [recordingsFolder, setRecordingsFolder] = useState<string>("");
+
+  useEffect(() => {
+    if (storageLocations?.recordings) {
+      setRecordingsFolder(storageLocations.recordings);
+    }
+  }, [storageLocations]);
+
+  const handleSelectFolder = async () => {
+    try {
+      const selected = await invoke<string | null>('select_recording_folder');
+      if (selected) {
+        setRecordingsFolder(selected);
+        toast.success('Recordings save location updated!', { description: selected });
+      }
+    } catch (error) {
+      console.error('Failed to select recording folder:', error);
+      toast.error('Failed to update folder');
+    }
+  };
+
+  const handleResetFolder = async () => {
+    try {
+      const defaultPath = await invoke<string>('reset_recording_folder_to_default');
+      setRecordingsFolder(defaultPath);
+      toast.success('Reset to default recording folder', { description: defaultPath });
+    } catch (error) {
+      console.error('Failed to reset recording folder:', error);
+      toast.error('Failed to reset folder');
+    }
+  };
+
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
     return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
@@ -163,7 +197,7 @@ export function PreferenceSettings() {
       <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Data Storage Locations</h3>
         <p className="text-sm text-gray-600 mb-6">
-          View and access where Meetily stores your data
+          View and access where CrestMeet stores your data
         </p>
 
         <div className="space-y-4">
@@ -199,17 +233,47 @@ export function PreferenceSettings() {
 
           {/* Recordings Location */}
           <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Meeting Recordings</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.recordings || 'Loading...'}
+            <div className="flex items-center justify-between mb-1">
+              <div className="font-medium">Meeting Recordings & Files</div>
+              <span className="text-xs text-blue-700 bg-blue-50 font-medium px-2 py-0.5 rounded-full border border-blue-100">
+                Customizable
+              </span>
             </div>
-            <button
-              onClick={() => handleOpenFolder('recordings')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
+            <p className="text-xs text-gray-500 mb-2">
+              Audio recordings and meeting data folders will be saved to this folder.
+            </p>
+            <div className="text-sm text-gray-700 mb-3 break-all font-mono text-xs p-2.5 bg-white border border-gray-200 rounded">
+              {recordingsFolder || storageLocations?.recordings || 'Loading...'}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={handleSelectFolder}
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 shadow-sm"
+              >
+                <FolderEdit className="w-4 h-4" />
+                <span>Change Folder...</span>
+              </Button>
+              <Button
+                onClick={handleResetFolder}
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-1.5"
+                title="Reset to default music recordings directory"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-gray-500" />
+                <span>Reset to Default</span>
+              </Button>
+              <Button
+                onClick={() => handleOpenFolder('recordings')}
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-1.5"
+              >
+                <FolderOpen className="w-4 h-4 text-gray-500" />
+                <span>Open in Explorer</span>
+              </Button>
+            </div>
           </div>
         </div>
 

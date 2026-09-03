@@ -99,8 +99,8 @@ const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
 export function ConfigProvider({ children }: { children: ReactNode }) {
   // Model configuration state
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
-    provider: 'ollama',
-    model: 'llama3.2:latest',
+    provider: 'groq',
+    model: 'openai/gpt-oss-120b',
     whisperModel: 'large-v3',
     ollamaEndpoint: null
   });
@@ -268,11 +268,17 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             }
           }
 
-          // For non-custom-openai providers, just set base config
+          // For non-custom-openai providers, set base config (migrating legacy ollama to groq)
+          const resolvedProvider = (data.provider === 'ollama' || !data.provider) ? 'groq' : data.provider;
+          const isDeprecatedModel = !data.model || data.model.includes('llama3') || data.model.includes('llama-3.3') || data.model.includes('gemma');
+          const resolvedModel = resolvedProvider === 'groq' && isDeprecatedModel
+            ? 'openai/gpt-oss-120b'
+            : (data.model || 'openai/gpt-oss-120b');
+
           setModelConfig(prev => ({
             ...prev,
-            provider: data.provider,
-            model: data.model || prev.model,
+            provider: resolvedProvider,
+            model: resolvedModel,
             whisperModel: data.whisperModel || prev.whisperModel,
             ollamaEndpoint: data.ollamaEndpoint,
           }));

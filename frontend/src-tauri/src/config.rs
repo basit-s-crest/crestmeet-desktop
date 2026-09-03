@@ -37,7 +37,7 @@ pub const WHISPER_MODEL_CATALOG: &[(&str, &str, u32, &str, &str, &str)] = &[
 
 /// Default Supabase PostgreSQL connection string (Transaction Pooler - IPv4 compatible)
 pub const DEFAULT_SUPABASE_DATABASE_URL: &str =
-    "postgresql://postgres.yjqcxafjooyqfolnylwp:3t%5EQ9%21D-Ku%25t8uJ@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres";
+    "postgresql://postgres.yjqcxafjooyqfolnylwp:3t%5EQ9%21D-Ku%25t8uJ@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres";
 
 pub fn get_database_url() -> String {
     std::env::var("DATABASE_URL")

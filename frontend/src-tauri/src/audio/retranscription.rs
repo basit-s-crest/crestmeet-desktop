@@ -246,7 +246,7 @@ async fn run_retranscription<R: Runtime>(
             .await
             .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
 
-        sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
+        sqlx::query("DELETE FROM transcripts WHERE meeting_id = $1")
             .bind(&meeting_id)
             .execute(&mut *tx)
             .await
@@ -255,7 +255,7 @@ async fn run_retranscription<R: Runtime>(
         for segment in &segments {
             sqlx::query(
                 "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)"
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)"
             )
             .bind(&segment.id)
             .bind(&meeting_id)
@@ -269,7 +269,7 @@ async fn run_retranscription<R: Runtime>(
             .map_err(|e| anyhow!("Failed to insert transcript segment: {}", e))?;
         }
 
-        sqlx::query("UPDATE meetings SET updated_at = ? WHERE id = ?")
+        sqlx::query("UPDATE meetings SET updated_at = $1 WHERE id = $2")
             .bind(chrono::Utc::now().to_rfc3339())
             .bind(&meeting_id)
             .execute(&mut *tx)

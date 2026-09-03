@@ -1,8 +1,12 @@
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::RwLock;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
+
+/// Global cache for the active recordings folder so non-Tauri components can read it instantly
+static ACTIVE_RECORDINGS_FOLDER: RwLock<Option<PathBuf>> = RwLock::new(None);
 
 use anyhow::Result;
 #[cfg(target_os = "macos")]
@@ -43,37 +47,72 @@ impl Default for RecordingPreferences {
 pub fn get_default_recordings_folder() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
-        // Windows: %USERPROFILE%\Music\meetily-recordings
+        // Windows: %USERPROFILE%\Music\crestmeet-recordings
         if let Some(music_dir) = dirs::audio_dir() {
-            music_dir.join("meetily-recordings")
+            music_dir.join("crestmeet-recordings")
         } else {
             // Fallback to Documents if Music folder is not available
             dirs::document_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("meetily-recordings")
+                .join("crestmeet-recordings")
         }
     }
 
     #[cfg(target_os = "macos")]
     {
-        // macOS: ~/Movies/meetily-recordings
+        // macOS: ~/Movies/crestmeet-recordings
         if let Some(movies_dir) = dirs::video_dir() {
-            movies_dir.join("meetily-recordings")
+            movies_dir.join("crestmeet-recordings")
         } else {
             // Fallback to Documents if Movies folder is not available
             dirs::document_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join("meetily-recordings")
+                .join("crestmeet-recordings")
         }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        // Linux/Others: ~/Documents/meetily-recordings
+        // Linux/Others: ~/Documents/crestmeet-recordings
         dirs::document_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("meetily-recordings")
+            .join("crestmeet-recordings")
     }
+}
+
+/// Get the active configured recordings folder (cached, from disk, or fallback default)
+pub fn get_configured_recordings_folder() -> PathBuf {
+    if let Ok(guard) = ACTIVE_RECORDINGS_FOLDER.read() {
+        if let Some(ref path) = *guard {
+            return path.clone();
+        }
+    }
+
+    // Try reading directly from app config directory
+    if let Some(config_dir) = dirs::data_dir().or_else(|| dirs::config_dir()) {
+        for app_folder in &["com.crestmeet.ai", "com.meetily.ai"] {
+            let path = config_dir.join(app_folder).join("recording_preferences.json");
+            if path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(folder_str) = val.get("preferences")
+                            .and_then(|p| p.get("save_folder"))
+                            .and_then(|f| f.as_str()) {
+                            let custom_path = PathBuf::from(folder_str);
+                            if !custom_path.as_os_str().is_empty() {
+                                if let Ok(mut guard) = ACTIVE_RECORDINGS_FOLDER.write() {
+                                    *guard = Some(custom_path.clone());
+                                }
+                                return custom_path;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    get_default_recordings_folder()
 }
 
 /// Ensure the recordings directory exists
@@ -108,9 +147,11 @@ pub async fn load_recording_preferences<R: Runtime>(
     // Try to get the preferences from store
     let prefs = if let Some(value) = store.get("preferences") {
         match serde_json::from_value::<RecordingPreferences>(value.clone()) {
-            Ok(#[allow(unused_mut)] mut p) => {
+            Ok(p) => {
                 info!("Loaded recording preferences from store");
                 // Update macOS backend to current value if needed
+                #[cfg(target_os = "macos")]
+                let mut p = p;
                 #[cfg(target_os = "macos")]
                 {
                     let backend = crate::audio::capture::get_current_backend();
@@ -128,6 +169,10 @@ pub async fn load_recording_preferences<R: Runtime>(
         RecordingPreferences::default()
     };
 
+    if let Ok(mut guard) = ACTIVE_RECORDINGS_FOLDER.write() {
+        *guard = Some(prefs.save_folder.clone());
+    }
+
     info!("Loaded recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
           prefs.save_folder, prefs.auto_save, prefs.file_format,
           prefs.preferred_mic_device, prefs.preferred_system_device);
@@ -142,6 +187,10 @@ pub async fn save_recording_preferences<R: Runtime>(
     info!("Saving recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
           preferences.save_folder, preferences.auto_save, preferences.file_format,
           preferences.preferred_mic_device, preferences.preferred_system_device);
+
+    if let Ok(mut guard) = ACTIVE_RECORDINGS_FOLDER.write() {
+        *guard = Some(preferences.save_folder.clone());
+    }
 
     // Get or create store
     let store = app
@@ -199,7 +248,7 @@ pub async fn set_recording_preferences<R: Runtime>(
 
 #[tauri::command]
 pub async fn get_default_recordings_folder_path() -> Result<String, String> {
-    let path = get_default_recordings_folder();
+    let path = get_configured_recordings_folder();
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -245,13 +294,68 @@ pub async fn open_recordings_folder<R: Runtime>(app: AppHandle<R>) -> Result<(),
 
 #[tauri::command]
 pub async fn select_recording_folder<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
 ) -> Result<Option<String>, String> {
-    // Use Tauri's dialog to select folder
-    // For now, return None - this would need to be implemented with tauri-plugin-dialog
-    // when it's available in the Cargo.toml
-    warn!("Folder selection not yet implemented - using dialog plugin");
-    Ok(None)
+    use tauri_plugin_dialog::DialogExt;
+
+    info!("Opening dialog to select custom recordings folder");
+
+    let app_clone = app.clone();
+    let folder_path = tokio::task::spawn_blocking(move || {
+        app_clone
+            .dialog()
+            .file()
+            .blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| format!("Folder dialog task failed: {}", e))?;
+
+    match folder_path {
+        Some(path) => {
+            let path_str = path.to_string();
+            info!("User selected custom recordings folder: {}", path_str);
+
+            let new_path = PathBuf::from(&path_str);
+            ensure_recordings_directory(&new_path)
+                .map_err(|e| format!("Failed to create selected folder: {}", e))?;
+
+            // Update preferences
+            let mut prefs = load_recording_preferences(&app)
+                .await
+                .unwrap_or_default();
+            prefs.save_folder = new_path;
+
+            save_recording_preferences(&app, &prefs)
+                .await
+                .map_err(|e| format!("Failed to save preferences: {}", e))?;
+
+            Ok(Some(path_str))
+        }
+        None => {
+            info!("User cancelled folder selection");
+            Ok(None)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn reset_recording_folder_to_default<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<String, String> {
+    let default_path = get_default_recordings_folder();
+    let default_str = default_path.to_string_lossy().to_string();
+
+    let mut prefs = load_recording_preferences(&app)
+        .await
+        .unwrap_or_default();
+    prefs.save_folder = default_path.clone();
+
+    save_recording_preferences(&app, &prefs)
+        .await
+        .map_err(|e| format!("Failed to save preferences: {}", e))?;
+
+    info!("Reset recordings folder to default: {}", default_str);
+    Ok(default_str)
 }
 
 // Backend selection commands

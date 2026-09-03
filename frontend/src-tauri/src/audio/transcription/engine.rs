@@ -16,6 +16,10 @@ pub enum TranscriptionEngine {
     Whisper(Arc<crate::whisper_engine::WhisperEngine>),  // Direct access (backward compat)
     Parakeet(Arc<crate::parakeet_engine::ParakeetEngine>), // Direct access (backward compat)
     Provider(Arc<dyn TranscriptionProvider>),  // Trait-based (preferred for new code)
+    DeepgramLive {
+        api_key: String,
+        model: String,
+    },
 }
 
 impl TranscriptionEngine {
@@ -25,6 +29,7 @@ impl TranscriptionEngine {
             Self::Whisper(engine) => engine.is_model_loaded().await,
             Self::Parakeet(engine) => engine.is_model_loaded().await,
             Self::Provider(provider) => provider.is_model_loaded().await,
+            Self::DeepgramLive { .. } => true,
         }
     }
 
@@ -34,6 +39,7 @@ impl TranscriptionEngine {
             Self::Whisper(engine) => engine.get_current_model().await,
             Self::Parakeet(engine) => engine.get_current_model().await,
             Self::Provider(provider) => provider.get_current_model().await,
+            Self::DeepgramLive { model, .. } => Some(model.clone()),
         }
     }
 
@@ -43,6 +49,7 @@ impl TranscriptionEngine {
             Self::Whisper(_) => "Whisper (direct)",
             Self::Parakeet(_) => "Parakeet (direct)",
             Self::Provider(provider) => provider.provider_name(),
+            Self::DeepgramLive { .. } => "deepgram",
         }
     }
 }
@@ -88,53 +95,6 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
 
     // Validate based on provider
     match config.provider.as_str() {
-        "localWhisper" => {
-            info!("🔍 Validating Whisper model...");
-            // Ensure whisper engine is initialized first
-            if let Err(init_error) = crate::whisper_engine::commands::whisper_init().await {
-                warn!("❌ Failed to initialize Whisper engine: {}", init_error);
-                return Err(format!(
-                    "Failed to initialize speech recognition: {}",
-                    init_error
-                ));
-            }
-
-            // Call the whisper validation command with config support
-            match crate::whisper_engine::commands::whisper_validate_model_ready_with_config(app).await {
-                Ok(model_name) => {
-                    info!("✅ Whisper model validation successful: {} is ready", model_name);
-                    Ok(())
-                }
-                Err(e) => {
-                    warn!("❌ Whisper model validation failed: {}", e);
-                    Err(e)
-                }
-            }
-        }
-        "parakeet" => {
-            info!("🔍 Validating Parakeet model...");
-            // Ensure parakeet engine is initialized first
-            if let Err(init_error) = crate::parakeet_engine::commands::parakeet_init().await {
-                warn!("❌ Failed to initialize Parakeet engine: {}", init_error);
-                return Err(format!(
-                    "Failed to initialize Parakeet speech recognition: {}",
-                    init_error
-                ));
-            }
-
-            // Use the validation command that includes auto-discovery and loading
-            // This matches the Whisper behavior for consistency
-            match crate::parakeet_engine::commands::parakeet_validate_model_ready_with_config(app).await {
-                Ok(model_name) => {
-                    info!("✅ Parakeet model validation successful: {} is ready", model_name);
-                    Ok(())
-                }
-                Err(e) => {
-                    warn!("❌ Parakeet model validation failed: {}", e);
-                    Err(e)
-                }
-            }
-        }
         "deepgram" => {
             info!("🔍 Validating Deepgram API configuration...");
             let api_key = config.api_key.filter(|k| !k.trim().is_empty());
@@ -148,10 +108,14 @@ pub async fn validate_transcription_model_ready<R: Runtime>(app: &AppHandle<R>) 
             info!("✅ Deepgram API key is configured and ready");
             Ok(())
         }
+        "localWhisper" | "parakeet" => {
+            warn!("⚠️ Local transcription models have been decommissioned.");
+            Err("Local models are disabled. Please enter your Deepgram API key in Settings -> Transcription to use Cloud STT.".to_string())
+        }
         other => {
             warn!("❌ Unsupported transcription provider for recording: {}", other);
             Err(format!(
-                "Provider '{}' is not supported. Please select 'parakeet', 'localWhisper', or 'deepgram'.",
+                "Provider '{}' is not supported. Please select 'deepgram'.",
                 other
             ))
         }
@@ -197,36 +161,8 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
 
     // Initialize the appropriate engine based on provider
     match config.provider.as_str() {
-        "parakeet" => {
-            info!("🦜 Initializing Parakeet transcription engine");
-
-            // Get Parakeet engine
-            let engine = {
-                let guard = crate::parakeet_engine::commands::PARAKEET_ENGINE
-                    .lock()
-                    .unwrap();
-                guard.as_ref().cloned()
-            };
-
-            match engine {
-                Some(engine) => {
-                    // Check if model is loaded
-                    if engine.is_model_loaded().await {
-                        let model_name = engine.get_current_model().await
-                            .unwrap_or_else(|| "unknown".to_string());
-                        info!("✅ Parakeet model '{}' already loaded", model_name);
-                        Ok(TranscriptionEngine::Parakeet(engine))
-                    } else {
-                        Err("Parakeet engine initialized but no model loaded. This should not happen after validation.".to_string())
-                    }
-                }
-                None => {
-                    Err("Parakeet engine not initialized. This should not happen after validation.".to_string())
-                }
-            }
-        }
         "deepgram" => {
-            info!("☁️ Initializing Deepgram transcription engine");
+            info!("☁️ Initializing Deepgram live streaming WebSocket engine");
             let api_key = config.api_key.unwrap_or_default();
             if api_key.trim().is_empty() {
                 return Err("Deepgram API key is missing. Please set it in Settings -> Transcription.".to_string());
@@ -236,13 +172,10 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
             } else {
                 config.model
             };
-            let provider = Arc::new(crate::deepgram::DeepgramProvider::new(api_key, Some(model)));
-            Ok(TranscriptionEngine::Provider(provider))
+            Ok(TranscriptionEngine::DeepgramLive { api_key, model })
         }
-        "localWhisper" | _ => {
-            info!("🎤 Initializing Whisper transcription engine");
-            let whisper_engine = get_or_init_whisper(app).await?;
-            Ok(TranscriptionEngine::Whisper(whisper_engine))
+        "parakeet" | "localWhisper" | _ => {
+            Err("Local transcription models are disabled. Please configure Deepgram in Settings -> Transcription.".to_string())
         }
     }
 }

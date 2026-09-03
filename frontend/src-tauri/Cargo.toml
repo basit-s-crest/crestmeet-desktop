@@ -1,10 +1,9 @@
 [package]
-name = "meetily"
+name = "crestmeet"
 version = "0.4.0"
-description = "A Tauri App for meeting minutes"
-authors = ["Sujith S"]
+description = "CrestMeet AI meeting assistant"
+authors = ["Crest"]
 license = "MIT"
-repository = "https://github.com/Zackriya-Solutions/meeting-minutes"
 edition = "2021"
 rust-version = "1.77"
 
@@ -68,13 +67,12 @@ nnnoiseless = "0.5"
 futures-util = "0.3"
 silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "26a6460", package = "silero" }
 
-# Parakeet (ONNX-based fast transcription) dependencies
-ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Parakeet models
-thiserror = "2.0.16"                # Error handling for Parakeet
+thiserror = "2.0.16"
 
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }
 tokio-util = "0.7"  # Utilities for tokio including CancellationToken
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 async-trait = "0.1"  # Trait abstraction for async methods
 
 reqwest = { version = "0.11", features = ["blocking", "multipart", "json", "stream"] }
@@ -96,10 +94,8 @@ sysinfo = "0.32"
 lazy_static = { version = "1.4.0" }
 realfft = "3.4.0"
 regex = "1.11.0"
-ndarray = "0.16"
 bytes = { version = "1.9.0", features = ["serde"] }
 
-esaxx-rs = "0.1.10"
 symphonia = { version = "0.5.4", features = ["aac", "isomp4", "mp3", "flac", "ogg", "vorbis", "pcm", "wav", "opt-simd"] }
 rand = "0.8.5"
 rayon = "1.10"

@@ -1,5 +1,6 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ModelConfig, ModelSettingsModal } from "./ModelSettingsModal"
+import { GroqSummarySettings } from "./GroqSummarySettings"
 import { TranscriptModelProps, TranscriptSettings } from "./TranscriptSettings"
 import { RecordingSettings, RecordingPreferences } from "./RecordingSettings"
 import { About } from "./About";
@@ -39,12 +40,13 @@ export function SettingTabs({
     <TabsTrigger value="about">About</TabsTrigger>
   </TabsList>
   <TabsContent value="modelSettings">
-    <ModelSettingsModal
-
-modelConfig={modelConfig}
-setModelConfig={setModelConfig}
-onSave={onSave}
-/>
+    <div className="p-4 bg-white rounded-lg border border-gray-200 shadow-sm max-w-xl mx-auto">
+      <GroqSummarySettings
+        modelConfig={modelConfig}
+        setModelConfig={setModelConfig}
+        onSaveSuccess={() => setSaveSuccess(true)}
+      />
+    </div>
   </TabsContent>
 <TabsContent value="transcriptSettings">
     <TranscriptSettings

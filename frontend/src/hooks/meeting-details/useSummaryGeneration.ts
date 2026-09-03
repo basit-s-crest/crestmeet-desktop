@@ -233,10 +233,11 @@ export function useSummaryGeneration({
           setSummaryError(errorMessage);
           setSummaryStatus('error');
 
-          // Check if this is a "model is required" error
+          // Check if this is a "model is required" or API key error
           const isModelRequiredError = errorMessage.includes('model is required') ||
             errorMessage.includes('"model":"required"') ||
-            errorMessage.toLowerCase().includes('model') && errorMessage.toLowerCase().includes('required');
+            errorMessage.toLowerCase().includes('api key') ||
+            (errorMessage.toLowerCase().includes('model') && errorMessage.toLowerCase().includes('required'));
 
           // Show error toast
           toast.error(`Failed to ${isRegeneration ? 'regenerate' : 'generate'} summary`, {
@@ -480,6 +481,27 @@ export function useSummaryGeneration({
       template: selectedTemplate
     });
 
+    // Check if Groq provider has API key configured
+    if (modelConfig.provider === 'groq') {
+      let hasKey = Boolean(modelConfig.apiKey && modelConfig.apiKey.trim().length > 0);
+      if (!hasKey) {
+        try {
+          const key = (await invokeTauri('api_get_api_key', { provider: 'groq' })) as string;
+          hasKey = Boolean(key && key.trim().length > 0);
+        } catch (err) {
+          console.warn('Failed to verify Groq API key:', err);
+        }
+      }
+
+      if (!hasKey) {
+        toast.info('Please enter your Groq API key to generate summaries');
+        if (onOpenModelSettings) {
+          onOpenModelSettings();
+        }
+        return;
+      }
+    }
+
     // Check if Ollama provider has models available
     if (modelConfig.provider === 'ollama') {
       try {
@@ -624,6 +646,27 @@ export function useSummaryGeneration({
       console.error('No transcripts available for regeneration');
       toast.error('No transcripts available for summary regeneration');
       return;
+    }
+
+    // Check if Groq provider has API key configured
+    if (modelConfig.provider === 'groq') {
+      let hasKey = Boolean(modelConfig.apiKey && modelConfig.apiKey.trim().length > 0);
+      if (!hasKey) {
+        try {
+          const key = (await invokeTauri('api_get_api_key', { provider: 'groq' })) as string;
+          hasKey = Boolean(key && key.trim().length > 0);
+        } catch (err) {
+          console.warn('Failed to verify Groq API key:', err);
+        }
+      }
+
+      if (!hasKey) {
+        toast.info('Please enter your Groq API key to generate summaries');
+        if (onOpenModelSettings) {
+          onOpenModelSettings();
+        }
+        return;
+      }
     }
 
     await processSummary({
