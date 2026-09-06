@@ -81,7 +81,7 @@ pub async fn start_deepgram_live_session<R: Runtime>(
     }
 
     let mut ws_url = format!(
-        "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&model={}&smart_format=true&punctuate=true&interim_results=true&endpointing=300",
+        "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1&model={}&smart_format=true&punctuate=true&endpointing=300",
         model
     );
 
@@ -225,7 +225,8 @@ pub async fn start_deepgram_live_session<R: Runtime>(
                                     let is_final = val.get("is_final").and_then(|b| b.as_bool()).unwrap_or(true);
                                     let speech_final = val.get("speech_final").and_then(|b| b.as_bool()).unwrap_or(false);
 
-                                    if !transcript.is_empty() {
+                                    // Only process and emit finalized utterances to prevent incremental duplicate chunk display
+                                    if (is_final || speech_final) && !transcript.is_empty() {
                                         info!("🎙️ Deepgram live transcript (is_final={}, speech_final={}): \"{}\" (conf: {:.2})", is_final, speech_final, transcript, confidence);
 
                                         // Trigger speech detected event on first utterance
@@ -246,7 +247,7 @@ pub async fn start_deepgram_live_session<R: Runtime>(
                                             source: "Audio".to_string(),
                                             sequence_id,
                                             chunk_start_time: start,
-                                            is_partial: !is_final && !speech_final,
+                                            is_partial: false,
                                             confidence,
                                             audio_start_time: start,
                                             audio_end_time: start + duration,
