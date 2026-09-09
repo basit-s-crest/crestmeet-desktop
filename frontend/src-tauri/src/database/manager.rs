@@ -64,6 +64,16 @@ impl DatabaseManager {
         log::info!("Verifying Supabase database schema...");
 
         let schema = r#"
+            CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+            CREATE TABLE IF NOT EXISTS app_users (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
             CREATE TABLE IF NOT EXISTS meetings (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -156,6 +166,20 @@ impl DatabaseManager {
             CREATE INDEX IF NOT EXISTS idx_transcripts_meeting_id ON transcripts(meeting_id);
             CREATE INDEX IF NOT EXISTS idx_meeting_notes_meeting_id ON meeting_notes(meeting_id);
             CREATE INDEX IF NOT EXISTS idx_meetings_created_at ON meetings(created_at DESC);
+
+            -- Ensure multi-tenant isolation columns exist
+            ALTER TABLE meetings ADD COLUMN IF NOT EXISTS user_id UUID;
+            ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS user_id UUID;
+            ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS user_id UUID;
+            ALTER TABLE transcript_chunks ADD COLUMN IF NOT EXISTS user_id UUID;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS user_id UUID;
+            ALTER TABLE transcript_settings ADD COLUMN IF NOT EXISTS user_id UUID;
+            ALTER TABLE licensing ADD COLUMN IF NOT EXISTS user_id UUID;
+            ALTER TABLE meeting_notes ADD COLUMN IF NOT EXISTS user_id UUID;
+
+            CREATE INDEX IF NOT EXISTS idx_meetings_user_id ON meetings(user_id);
+            CREATE INDEX IF NOT EXISTS idx_transcripts_user_id ON transcripts(user_id);
+            CREATE INDEX IF NOT EXISTS idx_meeting_notes_user_id ON meeting_notes(user_id);
         "#;
 
         sqlx::raw_sql(schema).execute(pool).await?;

@@ -329,8 +329,9 @@ pub async fn api_get_meetings<R: Runtime>(
         auth_token.is_some()
     );
     let pool = state.db_manager.pool();
+    let current_user = *state.current_user_id.read().await;
     let meetings: Result<Vec<MeetingModel>, sqlx::Error> =
-        MeetingsRepository::get_meetings(pool).await;
+        MeetingsRepository::get_meetings_for_user(pool, current_user).await;
 
     match meetings {
         Ok(meeting_models) => {
@@ -471,8 +472,9 @@ pub async fn api_get_model_config<R: Runtime>(
 ) -> Result<Option<ModelConfig>, String> {
     log_info!("api_get_model_config called (native)");
     let pool = state.db_manager.pool();
+    let current_user = *state.current_user_id.read().await;
 
-    match SettingsRepository::get_model_config(pool).await {
+    match SettingsRepository::get_model_config_for_user(pool, current_user).await {
         Ok(Some(config)) => {
             log_info!(
                 "✅ Found model config in database: provider={}, model={}, whisperModel={}, ollamaEndpoint={:?}",
@@ -481,7 +483,7 @@ pub async fn api_get_model_config<R: Runtime>(
                 &config.whisper_model,
                 &config.ollama_endpoint
             );
-            match SettingsRepository::get_api_key(pool, &config.provider).await {
+            match SettingsRepository::get_api_key_for_user(pool, current_user, &config.provider).await {
                 Ok(api_key) => {
                     log_info!("Successfully retrieved model config and API key.");
                     Ok(Some(ModelConfig {
@@ -532,9 +534,11 @@ pub async fn api_save_model_config<R: Runtime>(
         &ollama_endpoint
     );
     let pool = state.db_manager.pool();
+    let current_user = *state.current_user_id.read().await;
 
-    if let Err(e) = SettingsRepository::save_model_config(
+    if let Err(e) = SettingsRepository::save_model_config_for_user(
         pool,
+        current_user,
         &provider,
         &model,
         &whisper_model,
@@ -550,7 +554,7 @@ pub async fn api_save_model_config<R: Runtime>(
     if let Some(key) = api_key {
         if !key.is_empty() && provider != "custom-openai" {
             log_info!("🔑 API key provided, saving...");
-            if let Err(e) = SettingsRepository::save_api_key(pool, &provider, &key).await {
+            if let Err(e) = SettingsRepository::save_api_key_for_user(pool, current_user, &provider, &key).await {
                 log_error!("❌ Failed to save API key: {}", e);
                 return Err(e.to_string());
             }
@@ -581,7 +585,8 @@ pub async fn api_get_api_key<R: Runtime>(
         "api_get_api_key called (native) for provider '{}'",
         &provider
     );
-    match SettingsRepository::get_api_key(&state.db_manager.pool(), &provider).await {
+    let current_user = *state.current_user_id.read().await;
+    match SettingsRepository::get_api_key_for_user(&state.db_manager.pool(), current_user, &provider).await {
         Ok(key) => {
             log_info!(
                 "Successfully retrieved API key for provider '{}'.",
@@ -609,7 +614,8 @@ pub async fn api_save_api_key<R: Runtime>(
         &provider
     );
     let pool = state.db_manager.pool();
-    match SettingsRepository::save_api_key(pool, &provider, &api_key).await {
+    let current_user = *state.current_user_id.read().await;
+    match SettingsRepository::save_api_key_for_user(pool, current_user, &provider, &api_key).await {
         Ok(_) => {
             log_info!("Successfully saved API key for provider '{}'", &provider);
             Ok(serde_json::json!({ "status": "success", "message": "API key saved successfully" }))
@@ -629,15 +635,16 @@ pub async fn api_get_transcript_config<R: Runtime>(
 ) -> Result<Option<TranscriptConfig>, String> {
     log_info!("api_get_transcript_config called (native)");
     let pool = state.db_manager.pool();
+    let current_user = *state.current_user_id.read().await;
 
-    match SettingsRepository::get_transcript_config(pool).await {
+    match SettingsRepository::get_transcript_config_for_user(pool, current_user).await {
         Ok(Some(config)) => {
             log_info!(
                 "Found transcript config: provider={}, model={}",
                 &config.provider,
                 &config.model
             );
-            match SettingsRepository::get_transcript_api_key(pool, &config.provider).await {
+            match SettingsRepository::get_transcript_api_key_for_user(pool, current_user, &config.provider).await {
                 Ok(api_key) => {
                     log_info!("Successfully retrieved transcript config and API key.");
                     Ok(Some(TranscriptConfig {
@@ -657,10 +664,10 @@ pub async fn api_get_transcript_config<R: Runtime>(
             }
         }
         Ok(None) => {
-            log_info!("No transcript config found, returning default.");
+            log_info!("No transcript config found, returning default deepgram cloud config.");
             Ok(Some(TranscriptConfig {
-                provider: "parakeet".to_string(),
-                model: crate::config::DEFAULT_PARAKEET_MODEL.to_string(),
+                provider: "deepgram".to_string(),
+                model: "nova-2".to_string(),
                 api_key: None,
             }))
         }
@@ -685,8 +692,9 @@ pub async fn api_save_transcript_config<R: Runtime>(
         &provider
     );
     let pool = state.db_manager.pool();
+    let current_user = *state.current_user_id.read().await;
 
-    if let Err(e) = SettingsRepository::save_transcript_config(pool, &provider, &model).await {
+    if let Err(e) = SettingsRepository::save_transcript_config_for_user(pool, current_user, &provider, &model).await {
         log_error!("Failed to save transcript config: {}", e);
         return Err(e.to_string());
     }
@@ -694,7 +702,7 @@ pub async fn api_save_transcript_config<R: Runtime>(
     if let Some(key) = api_key {
         if !key.is_empty() {
             log_info!("API key provided, saving for transcript provider...");
-            if let Err(e) = SettingsRepository::save_transcript_api_key(pool, &provider, &key).await
+            if let Err(e) = SettingsRepository::save_transcript_api_key_for_user(pool, current_user, &provider, &key).await
             {
                 log_error!("Failed to save transcript API key: {}", e);
                 return Err(e.to_string());
@@ -719,7 +727,9 @@ pub async fn api_get_transcript_api_key<R: Runtime>(
         "api_get_transcript_api_key called (native) for provider '{}'",
         &provider
     );
-    match SettingsRepository::get_transcript_api_key(&state.db_manager.pool(), &provider).await {
+    let pool = state.db_manager.pool();
+    let current_user = *state.current_user_id.read().await;
+    match SettingsRepository::get_transcript_api_key_for_user(pool, current_user, &provider).await {
         Ok(key) => {
             log_info!(
                 "Successfully retrieved transcript API key for provider '{}'.",
@@ -996,13 +1006,15 @@ pub async fn api_save_transcript<R: Runtime>(
     }
 
     let pool = state.db_manager.pool();
+    let current_user = *state.current_user_id.read().await;
 
     // Now, call the repository with the correctly typed data.
-    match TranscriptsRepository::save_transcript(
+    match TranscriptsRepository::save_transcript_for_user(
         pool,
         &meeting_title,
         &transcripts_to_save,
         folder_path,
+        current_user,
     )
     .await
     {

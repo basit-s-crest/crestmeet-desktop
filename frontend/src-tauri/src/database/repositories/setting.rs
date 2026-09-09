@@ -2,7 +2,9 @@
 
 use crate::database::models::{Setting, TranscriptSetting};
 use crate::summary::CustomOpenAIConfig;
+use log::warn;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 #[derive(serde::Deserialize, Debug)]
 pub struct SaveModelConfigRequest {
@@ -27,33 +29,68 @@ pub struct SaveTranscriptConfigRequest {
 pub struct SettingsRepository;
 
 impl SettingsRepository {
+    async fn resolve_user_id(pool: &PgPool, user_id: Option<Uuid>) -> Option<Uuid> {
+        if let Some(uid) = user_id {
+            Some(uid)
+        } else {
+            // Fallback: look up the first user in auth.users if available
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM auth.users ORDER BY created_at ASC LIMIT 1")
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None)
+        }
+    }
+
+    pub async fn get_model_config_for_user(
+        pool: &PgPool,
+        user_id: Option<Uuid>,
+    ) -> std::result::Result<Option<Setting>, sqlx::Error> {
+        if let Some(uid) = user_id {
+            sqlx::query_as::<_, Setting>("SELECT * FROM settings WHERE user_id = $1 LIMIT 1")
+                .bind(uid)
+                .fetch_optional(pool)
+                .await
+        } else {
+            sqlx::query_as::<_, Setting>("SELECT * FROM settings LIMIT 1")
+                .fetch_optional(pool)
+                .await
+        }
+    }
+
     pub async fn get_model_config(
         pool: &PgPool,
     ) -> std::result::Result<Option<Setting>, sqlx::Error> {
-        let setting = sqlx::query_as::<_, Setting>("SELECT * FROM settings LIMIT 1")
-            .fetch_optional(pool)
-            .await?;
-        Ok(setting)
+        Self::get_model_config_for_user(pool, None).await
     }
 
-    pub async fn save_model_config(
+    pub async fn save_model_config_for_user(
         pool: &PgPool,
+        user_id: Option<Uuid>,
         provider: &str,
         model: &str,
         whisper_model: &str,
         ollama_endpoint: Option<&str>,
     ) -> std::result::Result<(), sqlx::Error> {
+        let target_uid = match Self::resolve_user_id(pool, user_id).await {
+            Some(uid) => uid,
+            None => {
+                warn!("No active user found to save model config; skipping initial write.");
+                return Ok(());
+            }
+        };
+
         sqlx::query(
             r#"
-            INSERT INTO settings (id, provider, model, "whisperModel", "ollamaEndpoint")
-            VALUES ('1', $1, $2, $3, $4)
-            ON CONFLICT (id) DO UPDATE SET
+            INSERT INTO settings (id, user_id, provider, model, "whisperModel", "ollamaEndpoint")
+            VALUES ($1::text, $1, $2, $3, $4, $5)
+            ON CONFLICT (user_id) DO UPDATE SET
                 provider = EXCLUDED.provider,
                 model = EXCLUDED.model,
                 "whisperModel" = EXCLUDED."whisperModel",
                 "ollamaEndpoint" = EXCLUDED."ollamaEndpoint"
             "#,
         )
+        .bind(target_uid)
         .bind(provider)
         .bind(model)
         .bind(whisper_model)
@@ -64,8 +101,19 @@ impl SettingsRepository {
         Ok(())
     }
 
-    pub async fn save_api_key(
+    pub async fn save_model_config(
         pool: &PgPool,
+        provider: &str,
+        model: &str,
+        whisper_model: &str,
+        ollama_endpoint: Option<&str>,
+    ) -> std::result::Result<(), sqlx::Error> {
+        Self::save_model_config_for_user(pool, None, provider, model, whisper_model, ollama_endpoint).await
+    }
+
+    pub async fn save_api_key_for_user(
+        pool: &PgPool,
+        user_id: Option<Uuid>,
         provider: &str,
         api_key: &str,
     ) -> std::result::Result<(), sqlx::Error> {
@@ -89,34 +137,54 @@ impl SettingsRepository {
             }
         };
 
+        let target_uid = match Self::resolve_user_id(pool, user_id).await {
+            Some(uid) => uid,
+            None => {
+                warn!("No active user found to save API key; skipping.");
+                return Ok(());
+            }
+        };
+
         let query = format!(
             r#"
-            INSERT INTO settings (id, provider, model, "whisperModel", "{}")
-            VALUES ('1', 'openai', 'gpt-4o-2024-11-20', 'large-v3', $1)
-            ON CONFLICT (id) DO UPDATE SET
-                "{}" = $1
+            INSERT INTO settings (id, user_id, provider, model, "whisperModel", "{}")
+            VALUES ($1::text, $1, 'openai', 'gpt-4o-2024-11-20', 'large-v3', $2)
+            ON CONFLICT (user_id) DO UPDATE SET
+                "{}" = $2
             "#,
             api_key_column, api_key_column
         );
-        sqlx::query(&query).bind(api_key).execute(pool).await?;
+        sqlx::query(&query)
+            .bind(target_uid)
+            .bind(api_key)
+            .execute(pool)
+            .await?;
 
         Ok(())
     }
 
-    pub async fn get_api_key(
+    pub async fn save_api_key(
         pool: &PgPool,
+        provider: &str,
+        api_key: &str,
+    ) -> std::result::Result<(), sqlx::Error> {
+        Self::save_api_key_for_user(pool, None, provider, api_key).await
+    }
+
+    pub async fn get_api_key_for_user(
+        pool: &PgPool,
+        user_id: Option<Uuid>,
         provider: &str,
     ) -> std::result::Result<Option<String>, sqlx::Error> {
         if provider == "custom-openai" {
-            let config = Self::get_custom_openai_config(pool).await?;
-            return Ok(config.and_then(|c| c.api_key));
+            return Ok(None);
         }
 
         let api_key_column = match provider {
             "openai" => "openaiApiKey",
+            "claude" => "anthropicApiKey",
             "ollama" => "ollamaApiKey",
             "groq" => "groqApiKey",
-            "claude" => "anthropicApiKey",
             "openrouter" => "openRouterApiKey",
             "builtin-ai" => return Ok(None),
             _ => {
@@ -126,38 +194,78 @@ impl SettingsRepository {
             }
         };
 
-        let query = format!(
-            "SELECT \"{}\" FROM settings WHERE id = '1' LIMIT 1",
-            api_key_column
-        );
-        let api_key = sqlx::query_scalar(&query).fetch_optional(pool).await?;
-        Ok(api_key)
+        if let Some(uid) = user_id {
+            let query = format!(
+                "SELECT \"{}\" FROM settings WHERE user_id = $1 LIMIT 1",
+                api_key_column
+            );
+            sqlx::query_scalar(&query).bind(uid).fetch_optional(pool).await
+        } else {
+            let query = format!(
+                "SELECT \"{}\" FROM settings LIMIT 1",
+                api_key_column
+            );
+            sqlx::query_scalar(&query).fetch_optional(pool).await
+        }
+    }
+
+    pub async fn get_api_key(
+        pool: &PgPool,
+        provider: &str,
+    ) -> std::result::Result<Option<String>, sqlx::Error> {
+        Self::get_api_key_for_user(pool, None, provider).await
+    }
+
+    pub async fn get_transcript_config_for_user(
+        pool: &PgPool,
+        user_id: Option<Uuid>,
+    ) -> std::result::Result<Option<TranscriptSetting>, sqlx::Error> {
+        if let Some(uid) = user_id {
+            sqlx::query_as::<_, TranscriptSetting>(
+                "SELECT * FROM transcript_settings WHERE user_id = $1 LIMIT 1",
+            )
+            .bind(uid)
+            .fetch_optional(pool)
+            .await
+        } else {
+            sqlx::query_as::<_, TranscriptSetting>(
+                "SELECT * FROM transcript_settings LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await
+        }
     }
 
     pub async fn get_transcript_config(
         pool: &PgPool,
     ) -> std::result::Result<Option<TranscriptSetting>, sqlx::Error> {
-        let setting =
-            sqlx::query_as::<_, TranscriptSetting>("SELECT * FROM transcript_settings LIMIT 1")
-                .fetch_optional(pool)
-                .await?;
-        Ok(setting)
+        Self::get_transcript_config_for_user(pool, None).await
     }
 
-    pub async fn save_transcript_config(
+    pub async fn save_transcript_config_for_user(
         pool: &PgPool,
+        user_id: Option<Uuid>,
         provider: &str,
         model: &str,
     ) -> std::result::Result<(), sqlx::Error> {
+        let target_uid = match Self::resolve_user_id(pool, user_id).await {
+            Some(uid) => uid,
+            None => {
+                warn!("No active user found to save transcript config; skipping.");
+                return Ok(());
+            }
+        };
+
         sqlx::query(
             r#"
-            INSERT INTO transcript_settings (id, provider, model)
-            VALUES ('1', $1, $2)
-            ON CONFLICT (id) DO UPDATE SET
+            INSERT INTO transcript_settings (id, user_id, provider, model)
+            VALUES ($1::text, $1, $2, $3)
+            ON CONFLICT (user_id) DO UPDATE SET
                 provider = EXCLUDED.provider,
                 model = EXCLUDED.model
             "#,
         )
+        .bind(target_uid)
         .bind(provider)
         .bind(model)
         .execute(pool)
@@ -166,8 +274,17 @@ impl SettingsRepository {
         Ok(())
     }
 
-    pub async fn save_transcript_api_key(
+    pub async fn save_transcript_config(
         pool: &PgPool,
+        provider: &str,
+        model: &str,
+    ) -> std::result::Result<(), sqlx::Error> {
+        Self::save_transcript_config_for_user(pool, None, provider, model).await
+    }
+
+    pub async fn save_transcript_api_key_for_user(
+        pool: &PgPool,
+        user_id: Option<Uuid>,
         provider: &str,
         api_key: &str,
     ) -> std::result::Result<(), sqlx::Error> {
@@ -185,22 +302,43 @@ impl SettingsRepository {
             }
         };
 
+        let target_uid = match Self::resolve_user_id(pool, user_id).await {
+            Some(uid) => uid,
+            None => {
+                warn!("No active user found to save transcript API key; skipping.");
+                return Ok(());
+            }
+        };
+
         let query = format!(
             r#"
-            INSERT INTO transcript_settings (id, provider, model, "{}")
-            VALUES ('1', 'deepgram', 'nova-2', $1)
-            ON CONFLICT (id) DO UPDATE SET
-                "{}" = $1
+            INSERT INTO transcript_settings (id, user_id, provider, model, "{}")
+            VALUES ($1::text, $1, 'deepgram', 'nova-2', $2)
+            ON CONFLICT (user_id) DO UPDATE SET
+                "{}" = $2
             "#,
             api_key_column, api_key_column
         );
-        sqlx::query(&query).bind(api_key).execute(pool).await?;
+        sqlx::query(&query)
+            .bind(target_uid)
+            .bind(api_key)
+            .execute(pool)
+            .await?;
 
         Ok(())
     }
 
-    pub async fn get_transcript_api_key(
+    pub async fn save_transcript_api_key(
         pool: &PgPool,
+        provider: &str,
+        api_key: &str,
+    ) -> std::result::Result<(), sqlx::Error> {
+        Self::save_transcript_api_key_for_user(pool, None, provider, api_key).await
+    }
+
+    pub async fn get_transcript_api_key_for_user(
+        pool: &PgPool,
+        user_id: Option<Uuid>,
         provider: &str,
     ) -> std::result::Result<Option<String>, sqlx::Error> {
         let api_key_column = match provider {
@@ -217,12 +355,26 @@ impl SettingsRepository {
             }
         };
 
-        let query = format!(
-            "SELECT \"{}\" FROM transcript_settings WHERE id = '1' LIMIT 1",
-            api_key_column
-        );
-        let api_key = sqlx::query_scalar(&query).fetch_optional(pool).await?;
-        Ok(api_key)
+        if let Some(uid) = user_id {
+            let query = format!(
+                "SELECT \"{}\" FROM transcript_settings WHERE user_id = $1 LIMIT 1",
+                api_key_column
+            );
+            sqlx::query_scalar(&query).bind(uid).fetch_optional(pool).await
+        } else {
+            let query = format!(
+                "SELECT \"{}\" FROM transcript_settings LIMIT 1",
+                api_key_column
+            );
+            sqlx::query_scalar(&query).fetch_optional(pool).await
+        }
+    }
+
+    pub async fn get_transcript_api_key(
+        pool: &PgPool,
+        provider: &str,
+    ) -> std::result::Result<Option<String>, sqlx::Error> {
+        Self::get_transcript_api_key_for_user(pool, None, provider).await
     }
 
     pub async fn delete_api_key(
@@ -230,7 +382,7 @@ impl SettingsRepository {
         provider: &str,
     ) -> std::result::Result<(), sqlx::Error> {
         if provider == "custom-openai" {
-            sqlx::query("UPDATE settings SET \"customOpenAIConfig\" = NULL WHERE id = '1'")
+            sqlx::query("UPDATE settings SET \"customOpenAIConfig\" = NULL")
                 .execute(pool)
                 .await?;
             return Ok(());
@@ -250,10 +402,7 @@ impl SettingsRepository {
             }
         };
 
-        let query = format!(
-            "UPDATE settings SET \"{}\" = NULL WHERE id = '1'",
-            api_key_column
-        );
+        let query = format!("UPDATE settings SET \"{}\" = NULL", api_key_column);
         sqlx::query(&query).execute(pool).await?;
 
         Ok(())
@@ -263,34 +412,25 @@ impl SettingsRepository {
         pool: &PgPool,
     ) -> std::result::Result<Option<CustomOpenAIConfig>, sqlx::Error> {
         use sqlx::Row;
+        let row = sqlx::query("SELECT \"customOpenAIConfig\" FROM settings LIMIT 1")
+            .fetch_optional(pool)
+            .await?;
 
-        let row = sqlx::query(
-            r#"
-            SELECT "customOpenAIConfig"
-            FROM settings
-            WHERE id = '1'
-            LIMIT 1
-            "#
-        )
-        .fetch_optional(pool)
-        .await?;
-
-        match row {
-            Some(record) => {
-                let config_json: Option<String> = record.get("customOpenAIConfig");
-
-                if let Some(json) = config_json {
-                    let config: CustomOpenAIConfig = serde_json::from_str(&json)
-                        .map_err(|e| sqlx::Error::Protocol(
-                            format!("Invalid JSON in customOpenAIConfig: {}", e).into()
-                        ))?;
-
-                    Ok(Some(config))
-                } else {
-                    Ok(None)
+        if let Some(row) = row {
+            let config_str: Option<String> = row.try_get("customOpenAIConfig")?;
+            if let Some(config_str) = config_str {
+                match serde_json::from_str::<CustomOpenAIConfig>(&config_str) {
+                    Ok(config) => Ok(Some(config)),
+                    Err(e) => {
+                        log::error!("Failed to parse custom OpenAI config: {}", e);
+                        Ok(None)
+                    }
                 }
+            } else {
+                Ok(None)
             }
-            None => Ok(None),
+        } else {
+            Ok(None)
         }
     }
 
@@ -298,23 +438,14 @@ impl SettingsRepository {
         pool: &PgPool,
         config: &CustomOpenAIConfig,
     ) -> std::result::Result<(), sqlx::Error> {
-        let config_json = serde_json::to_string(config)
-            .map_err(|e| sqlx::Error::Protocol(
-                format!("Failed to serialize config to JSON: {}", e).into()
-            ))?;
+        let config_str = serde_json::to_string(config).map_err(|e| {
+            sqlx::Error::Protocol(format!("Failed to serialize custom OpenAI config: {}", e))
+        })?;
 
-        sqlx::query(
-            r#"
-            INSERT INTO settings (id, provider, model, "whisperModel", "customOpenAIConfig")
-            VALUES ('1', 'custom-openai', $1, 'large-v3', $2)
-            ON CONFLICT (id) DO UPDATE SET
-                "customOpenAIConfig" = EXCLUDED."customOpenAIConfig"
-            "#,
-        )
-        .bind(&config.model)
-        .bind(config_json)
-        .execute(pool)
-        .await?;
+        sqlx::query("UPDATE settings SET \"customOpenAIConfig\" = $1")
+            .bind(config_str)
+            .execute(pool)
+            .await?;
 
         Ok(())
     }

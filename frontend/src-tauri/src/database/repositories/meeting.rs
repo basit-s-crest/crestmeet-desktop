@@ -5,16 +5,34 @@ use crate::database::models::{MeetingModel, Transcript};
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, PgConnection, PgPool};
 use tracing::{error, info};
+use uuid::Uuid;
 
 pub struct MeetingsRepository;
 
 impl MeetingsRepository {
-    pub async fn get_meetings(pool: &PgPool) -> Result<Vec<MeetingModel>, sqlx::Error> {
-        let meetings =
-            sqlx::query_as::<_, MeetingModel>("SELECT * FROM meetings ORDER BY created_at DESC")
-                .fetch_all(pool)
-                .await?;
+    pub async fn get_meetings_for_user(
+        pool: &PgPool,
+        user_id: Option<Uuid>,
+    ) -> Result<Vec<MeetingModel>, sqlx::Error> {
+        let meetings = if let Some(uid) = user_id {
+            sqlx::query_as::<_, MeetingModel>(
+                "SELECT * FROM meetings WHERE user_id = $1 ORDER BY created_at DESC",
+            )
+            .bind(uid)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, MeetingModel>(
+                "SELECT * FROM meetings ORDER BY created_at DESC",
+            )
+            .fetch_all(pool)
+            .await?
+        };
         Ok(meetings)
+    }
+
+    pub async fn get_meetings(pool: &PgPool) -> Result<Vec<MeetingModel>, sqlx::Error> {
+        Self::get_meetings_for_user(pool, None).await
     }
 
     pub async fn delete_meeting(pool: &PgPool, meeting_id: &str) -> Result<bool, SqlxError> {
@@ -266,7 +284,13 @@ async fn delete_meeting_with_transaction(
         .execute(&mut *transaction)
         .await?;
 
-    // 4. Finally, delete the meeting
+    // 4. Delete from meeting_notes
+    sqlx::query("DELETE FROM meeting_notes WHERE meeting_id = $1")
+        .bind(meeting_id)
+        .execute(&mut *transaction)
+        .await?;
+
+    // 5. Finally, delete the meeting
     let result = sqlx::query("DELETE FROM meetings WHERE id = $1")
         .bind(meeting_id)
         .execute(&mut *transaction)

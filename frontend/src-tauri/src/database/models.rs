@@ -1,6 +1,7 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct MeetingModel {
@@ -9,6 +10,9 @@ pub struct MeetingModel {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub folder_path: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
@@ -35,6 +39,9 @@ pub struct Transcript {
     pub audio_start_time: Option<f64>,
     pub audio_end_time: Option<f64>,
     pub duration: Option<f64>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -52,6 +59,9 @@ pub struct SummaryProcess {
     pub metadata: Option<String>, // JSON
     pub result_backup: Option<String>, // Backup of result before regeneration
     pub result_backup_timestamp: Option<chrono::DateTime<chrono::Utc>>, // When backup was created
+    #[sqlx(default)]
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -64,11 +74,18 @@ pub struct TranscriptChunk {
     pub chunk_size: Option<i64>,
     pub overlap: Option<i64>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct Setting {
-    pub id: String,
+    #[sqlx(default)]
+    pub id: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
     pub provider: String,
     pub model: String,
     #[sqlx(rename = "whisperModel")]
@@ -109,7 +126,11 @@ impl Setting {
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TranscriptSetting {
-    pub id: String,
+    #[sqlx(default)]
+    pub id: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub user_id: Option<Uuid>,
     pub provider: String,
     pub model: String,
     #[sqlx(rename = "whisperApiKey")]

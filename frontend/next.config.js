@@ -17,6 +17,11 @@ const nextConfig = {
   // Add webpack configuration for Tauri
   webpack: (config, { isServer }) => {
     if (!isServer) {
+      config.output = {
+        ...config.output,
+        chunkLoadTimeout: 300000, // 5 minutes to prevent chunk load timeouts during cold compiles
+      };
+
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,

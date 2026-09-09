@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, File, Settings, ChevronLeftCircle, ChevronRightCircle, Calendar, StickyNote, Home, Trash2, Mic, Square, Plus, Search, Pencil, NotebookPen, SearchIcon, X, Upload, LogOut, User as UserIcon } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
 import type { CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
 import { useConfig } from '@/contexts/ConfigContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 import {
   Dialog,
@@ -61,6 +62,7 @@ const Sidebar: React.FC = () => {
   const { isRecording } = useRecordingState();
   const { openImportDialog } = useImportDialog();
   const { betaFeatures } = useConfig();
+  const { user, signOut } = useAuth();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['meetings']));
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showModelSettings, setShowModelSettings] = useState(false);
@@ -800,6 +802,23 @@ const Sidebar: React.FC = () => {
                 <Upload className="w-4 h-4 mr-2" />
                 <span>Import Audio</span>
               </button>
+            )}
+
+            {user && (
+              <div className="w-full px-2.5 py-1.5 mt-2 mb-1 flex items-center justify-between text-xs bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-1.5 truncate max-w-[145px]" title={user.email || ''}>
+                  <UserIcon className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                  <span className="truncate text-slate-700 dark:text-slate-300 font-medium">{user.email}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => signOut()}
+                  title="Sign Out"
+                  className="p-1 hover:bg-rose-100 hover:text-rose-600 rounded text-slate-400 transition-colors"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
             )}
 
             <button

@@ -25,7 +25,8 @@ import { RecordingPostProcessingProvider } from '@/contexts/RecordingPostProcess
 import { ImportAudioDialog, ImportDropOverlay } from '@/components/ImportAudio'
 import { ImportDialogProvider } from '@/contexts/ImportDialogContext'
 import { isAudioExtension, getAudioFormatsDisplayList } from '@/constants/audioFormats'
-
+import { AuthProvider } from '@/contexts/AuthContext'
+import { AuthGate } from '@/components/auth/AuthGate'
 
 const sourceSans3 = Source_Sans_3({
   subsets: ['latin'],
@@ -232,48 +233,68 @@ export default function RootLayout({
 
   return (
     <html lang="en">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if (typeof window !== 'undefined') {
+                window.addEventListener('error', function(e) {
+                  if (e.message && (e.message.indexOf('ChunkLoadError') !== -1 || e.message.indexOf('Loading chunk') !== -1)) {
+                    console.warn('[CrestMeet] Recovering from chunk load timeout, reloading...');
+                    setTimeout(function() { window.location.reload(); }, 1000);
+                  }
+                });
+              }
+            `,
+          }}
+        />
+      </head>
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
         <AnalyticsProvider>
-          <RecordingStateProvider>
-            <TranscriptProvider>
-              <ConfigProvider>
-                <OllamaDownloadProvider>
-                  <OnboardingProvider>
-                    <UpdateCheckProvider>
-                      <SidebarProvider>
-                        <TooltipProvider>
-                          <RecordingPostProcessingProvider>
-                            <ImportDialogProvider onOpen={handleOpenImportDialog}>
-                              {/* Download progress toast provider - listens for background downloads */}
-                              <DownloadProgressToastProvider />
+          <AuthProvider>
+            <AuthGate>
+              <RecordingStateProvider>
+                <TranscriptProvider>
+                  <ConfigProvider>
+                    <OllamaDownloadProvider>
+                      <OnboardingProvider>
+                        <UpdateCheckProvider>
+                          <SidebarProvider>
+                            <TooltipProvider>
+                              <RecordingPostProcessingProvider>
+                                <ImportDialogProvider onOpen={handleOpenImportDialog}>
+                                  {/* Download progress toast provider - listens for background downloads */}
+                                  <DownloadProgressToastProvider />
 
-                              {/* Show onboarding or main app */}
-                              {showOnboarding ? (
-                                <OnboardingFlow onComplete={handleOnboardingComplete} />
-                              ) : (
-                                <div className="flex">
-                                  <Sidebar />
-                                  <MainContent>{children}</MainContent>
-                                </div>
-                              )}
-                              {/* Import audio overlay and dialog */}
-                              <ImportDropOverlay visible={showDropOverlay} />
-                              <ConditionalImportDialog
-                                showImportDialog={showImportDialog}
-                                handleImportDialogClose={handleImportDialogClose}
-                                importFilePath={importFilePath}
-                              />
-                            </ImportDialogProvider>
-                          </RecordingPostProcessingProvider>
-                        </TooltipProvider>
-                      </SidebarProvider>
-                    </UpdateCheckProvider>
-                  </OnboardingProvider>
+                                  {/* Show onboarding or main app */}
+                                  {showOnboarding ? (
+                                    <OnboardingFlow onComplete={handleOnboardingComplete} />
+                                  ) : (
+                                    <div className="flex">
+                                      <Sidebar />
+                                      <MainContent>{children}</MainContent>
+                                    </div>
+                                  )}
+                                  {/* Import audio overlay and dialog */}
+                                  <ImportDropOverlay visible={showDropOverlay} />
+                                  <ConditionalImportDialog
+                                    showImportDialog={showImportDialog}
+                                    handleImportDialogClose={handleImportDialogClose}
+                                    importFilePath={importFilePath}
+                                  />
+                                </ImportDialogProvider>
+                              </RecordingPostProcessingProvider>
+                            </TooltipProvider>
+                          </SidebarProvider>
+                        </UpdateCheckProvider>
+                      </OnboardingProvider>
 
-                </OllamaDownloadProvider>
-              </ConfigProvider>
-            </TranscriptProvider>
-          </RecordingStateProvider>
+                    </OllamaDownloadProvider>
+                  </ConfigProvider>
+                </TranscriptProvider>
+              </RecordingStateProvider>
+            </AuthGate>
+          </AuthProvider>
         </AnalyticsProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
