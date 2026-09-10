@@ -127,13 +127,19 @@ impl TranscriptsRepository {
 
     /// Searches for a query string within the transcripts.
     /// It returns a list of matching transcripts with context.
-    pub async fn search_transcripts(
+    pub async fn search_transcripts_for_user(
         pool: &PgPool,
         query: &str,
+        user_id: Option<Uuid>,
     ) -> Result<Vec<TranscriptSearchResult>, SqlxError> {
         if query.trim().is_empty() {
             return Ok(Vec::new());
         }
+
+        let uid = match user_id {
+            Some(u) => u,
+            None => return Ok(Vec::new()),
+        };
 
         let search_query = format!("%{}%", query.to_lowercase());
 
@@ -141,8 +147,9 @@ impl TranscriptsRepository {
             "SELECT m.id, m.title, t.transcript, t.timestamp
              FROM meetings m
              JOIN transcripts t ON m.id = t.meeting_id
-             WHERE LOWER(t.transcript) LIKE $1",
+             WHERE m.user_id = $1 AND LOWER(t.transcript) LIKE $2",
         )
+        .bind(uid)
         .bind(&search_query)
         .fetch_all(pool)
         .await?;
@@ -161,6 +168,13 @@ impl TranscriptsRepository {
             .collect();
 
         Ok(results)
+    }
+
+    pub async fn search_transcripts(
+        pool: &PgPool,
+        query: &str,
+    ) -> Result<Vec<TranscriptSearchResult>, SqlxError> {
+        Self::search_transcripts_for_user(pool, query, None).await
     }
 
     /// Generates a snippet of text surrounding the first match of the query.

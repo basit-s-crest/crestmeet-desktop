@@ -22,11 +22,8 @@ impl MeetingsRepository {
             .fetch_all(pool)
             .await?
         } else {
-            sqlx::query_as::<_, MeetingModel>(
-                "SELECT * FROM meetings ORDER BY created_at DESC",
-            )
-            .fetch_all(pool)
-            .await?
+            // If unauthenticated or no user active, do not leak meetings from other users
+            Vec::new()
         };
         Ok(meetings)
     }

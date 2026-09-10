@@ -70,6 +70,13 @@ pub async fn start_deepgram_live_session<R: Runtime>(
         let err_msg = "Deepgram API key is missing".to_string();
         error!("{}", err_msg);
         let _ = app.emit(
+            "stt-status",
+            serde_json::json!({
+                "status": "error",
+                "message": "Deepgram API key missing"
+            }),
+        );
+        let _ = app.emit(
             "transcription-error",
             serde_json::json!({
                 "error": err_msg,
@@ -105,6 +112,13 @@ pub async fn start_deepgram_live_session<R: Runtime>(
         Err(e) => {
             error!("❌ Failed to connect to Deepgram WebSocket: {}", e);
             let _ = app.emit(
+                "stt-status",
+                serde_json::json!({
+                    "status": "error",
+                    "message": "Failed to connect to Deepgram WebSocket"
+                }),
+            );
+            let _ = app.emit(
                 "transcription-error",
                 serde_json::json!({
                     "error": e.to_string(),
@@ -119,6 +133,15 @@ pub async fn start_deepgram_live_session<R: Runtime>(
     info!(
         "✅ Deepgram WebSocket connected successfully! (HTTP {})",
         response.status()
+    );
+
+    // Notify frontend that STT stream is live and active
+    let _ = app.emit(
+        "stt-status",
+        serde_json::json!({
+            "status": "connected",
+            "provider": "deepgram"
+        }),
     );
 
     let (mut ws_write, mut ws_read) = ws_stream.split();
@@ -170,11 +193,11 @@ pub async fn start_deepgram_live_session<R: Runtime>(
                             }
                         }
                         None => {
-                            // Channel closed: send CloseStream to Deepgram and close cleanly
+                            // Channel closed: send CloseStream to Deepgram and wait generously for final transcriptions
                             info!("Audio queue exhausted. Sending CloseStream to Deepgram...");
                             let close_msg = serde_json::json!({ "type": "CloseStream" }).to_string();
                             let _ = ws_write.send(Message::Text(close_msg)).await;
-                            tokio::time::sleep(Duration::from_millis(800)).await;
+                            tokio::time::sleep(Duration::from_millis(1500)).await;
                             let _ = ws_write.close().await;
                             break;
                         }

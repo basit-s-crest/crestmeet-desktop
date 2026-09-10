@@ -23,19 +23,16 @@ struct AudioMixerRingBuffer {
 }
 
 impl AudioMixerRingBuffer {
-    fn new(sample_rate: u32) -> Self {
-        // Use 50ms windows for mixing
-        let window_ms = 600.0;
+    fn new(sample_rate: u32, is_streaming_stt: bool) -> Self {
+        // Use 100ms windows for low-latency live streaming STT (Deepgram), or 250ms for batch models
+        let window_ms = if is_streaming_stt { 100.0 } else { 250.0 };
         let window_size_samples = (sample_rate as f32 * window_ms / 1000.0) as usize;
 
-        // CRITICAL FIX: Increase max buffer to 400ms for system audio stability
-        // System audio (especially Core Audio on macOS) can have significant jitter
-        // due to sample-by-sample streaming → batching → channel transmission
-        // Accounts for: RNNoise buffering + Core Audio jitter + processing delays
-        let max_buffer_size = window_size_samples * 8;  // 400ms (was 200ms)
+        // Safety limit: up to 8 windows (800ms for streaming STT) to handle OS audio jitter
+        let max_buffer_size = window_size_samples * 8;
 
-        info!("🔊 Ring buffer initialized: window={}ms ({} samples), max={}ms ({} samples)",
-              window_ms, window_size_samples,
+        info!("🔊 Ring buffer initialized: window={}ms ({} samples, is_streaming_stt={}), max={}ms ({} samples)",
+              window_ms, window_size_samples, is_streaming_stt,
               window_ms * 8.0, max_buffer_size);
 
         Self {
@@ -696,6 +693,7 @@ pub struct AudioPipeline {
     mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    pub is_streaming_stt: bool,
 }
 
 impl AudioPipeline {
@@ -709,6 +707,7 @@ impl AudioPipeline {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        is_streaming_stt: bool,
     ) -> Self {
         // Log device characteristics for adaptive buffering
         info!("🎛️ AudioPipeline initializing with device characteristics:");
@@ -716,6 +715,7 @@ impl AudioPipeline {
               mic_device_name, mic_device_kind, mic_device_kind.buffer_timeout());
         info!("   System: '{}' ({:?}) - Buffer: {:?}",
               system_device_name, system_device_kind, system_device_kind.buffer_timeout());
+        info!("   Mode: {}", if is_streaming_stt { "Direct Live Streaming (Deepgram)" } else { "Local VAD Segments" });
 
         // Device kind information can be used for adaptive buffering in the future
         // For now, we log it for monitoring and potential optimization
@@ -739,8 +739,8 @@ impl AudioPipeline {
             }
         };
 
-        // Initialize professional audio mixing components
-        let ring_buffer = AudioMixerRingBuffer::new(sample_rate);
+        // Initialize professional audio mixing components with adaptive window size
+        let ring_buffer = AudioMixerRingBuffer::new(sample_rate, is_streaming_stt);
         let mixer = ProfessionalAudioMixer::new(sample_rate);
 
         // Note: target_chunk_duration_ms is ignored - VAD controls segmentation now
@@ -762,6 +762,7 @@ impl AudioPipeline {
             ring_buffer,
             mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
+            is_streaming_stt,
         }
     }
 
@@ -833,37 +834,66 @@ impl AudioPipeline {
                             // Previous 2x gain was causing excessive limiting/distortion
                             let mixed_with_gain = mixed_clean;
 
-                            // STEP 3: Send mixed audio for transcription (VAD + Whisper)
-                            match self.vad_processor.process_audio(&mixed_with_gain) {
-                                Ok(speech_segments) => {
-                                    for segment in speech_segments {
-                                        let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
+                            // STEP 3: Send mixed audio for transcription
+                            if self.is_streaming_stt {
+                                // DIRECT LIVE STREAMING MODE (Deepgram):
+                                // Resample mixed audio directly to 16kHz and send immediately (every 100ms window).
+                                // Deepgram handles server-side streaming VAD and endpointing with zero chunk loss
+                                // and zero lag between sentences.
+                                let samples_16k = if self.sample_rate != 16000 {
+                                    crate::audio::audio_processing::resample_audio(&mixed_with_gain, self.sample_rate, 16000)
+                                } else {
+                                    mixed_with_gain.clone()
+                                };
 
-                                        if segment.samples.len() >= 800 {  // Minimum 50ms at 16kHz - matches Parakeet capability
-                                            info!("📤 Sending VAD segment: {:.1}ms, {} samples",
-                                                  duration_ms, segment.samples.len());
+                                if !samples_16k.is_empty() {
+                                    let transcription_chunk = AudioChunk {
+                                        data: samples_16k,
+                                        sample_rate: 16000,
+                                        timestamp: chunk.timestamp,
+                                        chunk_id: self.chunk_id_counter,
+                                        device_type: DeviceType::Microphone, // Mixed audio
+                                    };
 
-                                            let transcription_chunk = AudioChunk {
-                                                data: segment.samples,
-                                                sample_rate: 16000,
-                                                timestamp: segment.start_timestamp_ms / 1000.0,
-                                                chunk_id: self.chunk_id_counter,
-                                                device_type: DeviceType::Microphone,  // Mixed audio
-                                            };
-
-                                            if let Err(e) = self.transcription_sender.send(transcription_chunk) {
-                                                warn!("Failed to send VAD segment: {}", e);
-                                            } else {
-                                                self.chunk_id_counter += 1;
-                                            }
-                                        } else {
-                                            debug!("⏭️ Dropping short VAD segment: {:.1}ms ({} samples < 800)",
-                                                   duration_ms, segment.samples.len());
-                                        }
+                                    if let Err(e) = self.transcription_sender.send(transcription_chunk) {
+                                        warn!("Failed to send streaming audio chunk to transcription: {}", e);
+                                    } else {
+                                        self.chunk_id_counter += 1;
                                     }
                                 }
-                                Err(e) => {
-                                    warn!("⚠️ VAD error: {}", e);
+                            } else {
+                                // BATCH / LOCAL VAD MODE (Whisper / Parakeet)
+                                match self.vad_processor.process_audio(&mixed_with_gain) {
+                                    Ok(speech_segments) => {
+                                        for segment in speech_segments {
+                                            let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
+
+                                            if segment.samples.len() >= 800 { // Minimum 50ms at 16kHz - matches Parakeet capability
+                                                info!("📤 Sending VAD segment: {:.1}ms, {} samples",
+                                                      duration_ms, segment.samples.len());
+
+                                                let transcription_chunk = AudioChunk {
+                                                    data: segment.samples,
+                                                    sample_rate: 16000,
+                                                    timestamp: segment.start_timestamp_ms / 1000.0,
+                                                    chunk_id: self.chunk_id_counter,
+                                                    device_type: DeviceType::Microphone, // Mixed audio
+                                                };
+
+                                                if let Err(e) = self.transcription_sender.send(transcription_chunk) {
+                                                    warn!("Failed to send VAD segment: {}", e);
+                                                } else {
+                                                    self.chunk_id_counter += 1;
+                                                }
+                                            } else {
+                                                debug!("⏭️ Dropping short VAD segment: {:.1}ms ({} samples < 800)",
+                                                       duration_ms, segment.samples.len());
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("⚠️ VAD error: {}", e);
+                                    }
                                 }
                             }
 
@@ -968,11 +998,13 @@ impl AudioPipelineManager {
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
         system_device_kind: super::device_detection::InputDeviceKind,
+        is_streaming_stt: bool,
     ) -> Result<()> {
         // Log device information for adaptive buffering
         info!("🎙️ Starting pipeline with device info:");
         info!("   Microphone: '{}' ({:?})", mic_device_name, mic_device_kind);
         info!("   System Audio: '{}' ({:?})", system_device_name, system_device_kind);
+        info!("   Streaming STT (bypass VAD): {}", is_streaming_stt);
 
         // Create audio processing channel
         let (audio_sender, audio_receiver) = mpsc::unbounded_channel::<AudioChunk>();
@@ -991,6 +1023,7 @@ impl AudioPipelineManager {
             mic_device_kind,
             system_device_name,
             system_device_kind,
+            is_streaming_stt,
         );
 
         // CRITICAL FIX: Connect recording sender to receive pre-mixed audio

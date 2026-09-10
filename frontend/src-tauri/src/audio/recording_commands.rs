@@ -216,11 +216,10 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
-        // Example: Meeting 2025-10-03_08-25-23
         let now = chrono::Local::now();
         format!(
-            "Meeting {}",
-            now.format("%Y-%m-%d_%H-%M-%S")
+            "Meeting • {}",
+            now.format("%b %d, %Y, %I:%M %p")
         )
     });
     manager.set_meeting_name(Some(effective_meeting_name));
@@ -231,9 +230,20 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         let _ = app_for_error.emit("recording-error", error.user_message());
     });
 
+    // Determine whether the current STT provider is a streaming provider (like Deepgram)
+    let is_streaming_stt = match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state(), None).await {
+        Ok(Some(config)) => config.provider.to_lowercase() == "deepgram",
+        _ => true, // default provider is deepgram
+    };
+
+    let _ = app.emit("stt-status", serde_json::json!({
+        "status": "connecting",
+        "provider": if is_streaming_stt { "deepgram" } else { "local" }
+    }));
+
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
     let transcription_receiver = manager
-        .start_recording(microphone_device, system_device, auto_save)
+        .start_recording(microphone_device, system_device, auto_save, is_streaming_stt)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
 
@@ -389,8 +399,8 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
         let now = chrono::Local::now();
         format!(
-            "Meeting {}",
-            now.format("%Y-%m-%d_%H-%M-%S")
+            "Meeting • {}",
+            now.format("%b %d, %Y, %I:%M %p")
         )
     });
     manager.set_meeting_name(Some(effective_meeting_name));
@@ -401,9 +411,20 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         let _ = app_for_error.emit("recording-error", error.user_message());
     });
 
+    // Determine whether the current STT provider is a streaming provider (like Deepgram)
+    let is_streaming_stt = match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state(), None).await {
+        Ok(Some(config)) => config.provider.to_lowercase() == "deepgram",
+        _ => true, // default provider is deepgram
+    };
+
+    let _ = app.emit("stt-status", serde_json::json!({
+        "status": "connecting",
+        "provider": if is_streaming_stt { "deepgram" } else { "local" }
+    }));
+
     // Start recording with specified devices and auto_save setting
     let transcription_receiver = manager
-        .start_recording(mic_device, system_device, auto_save)
+        .start_recording(mic_device, system_device, auto_save, is_streaming_stt)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
 
@@ -889,6 +910,8 @@ pub async fn stop_recording<R: Runtime>(
 
     // Update tray menu to reflect stopped state
     crate::tray::update_tray_menu(&app);
+
+    let _ = app.emit("stt-status", serde_json::json!({ "status": "idle" }));
 
     info!("🎉 Recording stopped successfully with ZERO transcript chunks lost");
     Ok(())

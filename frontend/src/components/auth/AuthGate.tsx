@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { AuthView } from './AuthView';
 import { Loader2 } from 'lucide-react';
@@ -11,8 +11,17 @@ interface AuthGateProps {
 
 export function AuthGate({ children }: AuthGateProps) {
   const { user, loading } = useAuth();
+  const [forceReady, setForceReady] = useState(false);
 
-  if (loading) {
+  useEffect(() => {
+    // Safety fallback: Never allow the loading screen to hang for more than 1.5 seconds
+    const timer = setTimeout(() => {
+      setForceReady(true);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (loading && !forceReady) {
     return (
       <div className="fixed inset-0 bg-gray-50 flex flex-col items-center justify-center p-4 z-50">
         <div className="flex flex-col items-center gap-3">

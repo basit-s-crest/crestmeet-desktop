@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
+import { listen } from "@tauri-apps/api/event";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -130,6 +131,26 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Ref for infinite scroll trigger element
     const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
 
+    // STT channel status tracking
+    const [sttStatus, setSttStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+
+    useEffect(() => {
+        if (!isRecording) {
+            setSttStatus('idle');
+            return;
+        }
+        let unlisten: (() => void) | undefined;
+        listen<{ status: 'idle' | 'connecting' | 'connected' | 'error' }>('stt-status', (event) => {
+            if (event.payload?.status) {
+                setSttStatus(event.payload.status);
+            }
+        }).then(fn => { unlisten = fn; });
+
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, [isRecording]);
+
     // Force re-render without flushSync (avoids React warning)
     const [, rerender] = useReducer((x: number) => x + 1, 0);
 
@@ -246,13 +267,23 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     {isRecording ? (
                         <>
                             <div className="flex items-center justify-center mb-3">
-                                <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-blue-500 animate-pulse'}`}></div>
+                                <div className={`w-3 h-3 rounded-full ${
+                                    isPaused ? 'bg-orange-500' :
+                                    sttStatus === 'connected' ? 'bg-emerald-500 animate-pulse' :
+                                    sttStatus === 'error' ? 'bg-red-500' :
+                                    'bg-amber-400 animate-pulse'
+                                }`}></div>
                             </div>
-                            <p className="text-sm text-gray-600">
-                                {isPaused ? 'Recording paused' : 'Listening for speech...'}
+                            <p className="text-sm font-medium text-gray-700">
+                                {isPaused ? 'Recording paused' :
+                                 sttStatus === 'connected' ? 'STT Live • Listening for speech...' :
+                                 sttStatus === 'error' ? 'Speech-to-Text Connection Error' :
+                                 'Connecting to STT stream...'}
                             </p>
                             <p className="text-xs mt-1 text-gray-400">
-                                {isPaused ? 'Click resume to continue recording' : 'Speak to see live transcription'}
+                                {isPaused ? 'Click resume to continue recording' :
+                                 sttStatus === 'connected' ? 'Speak clearly — your transcription will appear live' :
+                                 'Establishing audio stream connection...'}
                             </p>
                         </>
                     ) : (
@@ -326,8 +357,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             exit={{ opacity: 0 }}
                             className="flex items-center gap-2 mt-4 text-gray-500"
                         >
-                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                            <span className="text-sm">Listening...</span>
+                            <div className={`w-2 h-2 rounded-full ${sttStatus === 'connected' ? 'bg-emerald-500' : 'bg-blue-500'} animate-pulse`}></div>
+                            <span className="text-sm font-medium">{sttStatus === 'connected' ? 'STT Live • Listening...' : 'Listening...'}</span>
                         </motion.div>
                     )}
                 </>
@@ -382,8 +413,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                             exit={{ opacity: 0 }}
                             className="flex items-center gap-2 mt-4 text-gray-500"
                         >
-                            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                            <span className="text-sm">Listening...</span>
+                            <div className={`w-2 h-2 rounded-full ${sttStatus === 'connected' ? 'bg-emerald-500' : 'bg-blue-500'} animate-pulse`}></div>
+                            <span className="text-sm font-medium">{sttStatus === 'connected' ? 'STT Live • Listening...' : 'Listening...'}</span>
                         </motion.div>
                     )}
                 </>

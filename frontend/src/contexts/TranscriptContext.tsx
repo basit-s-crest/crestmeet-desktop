@@ -105,8 +105,11 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             // Get meeting name
             const meetingName = await recordingService.getRecordingMeetingName();
 
-            // Use a better fallback that matches the backend's naming pattern
-            const effectiveTitle = meetingName || `Meeting ${new Date().toISOString().slice(0, 19).replace('T', '_').replace(/:/g, '-')}`;
+            // Use a clean, human-friendly fallback title
+            const effectiveTitle = meetingName || (() => {
+              const now = new Date();
+              return `Meeting • ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}, ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+            })();
 
             // Initialize meeting metadata in IndexedDB
             await indexedDBService.saveMeetingMetadata({

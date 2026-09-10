@@ -58,6 +58,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const [isValidatingModel, setIsValidatingModel] = useState(false);
   const [speechDetected, setSpeechDetected] = useState(false);
   const [deviceError, setDeviceError] = useState<{ title: string, message: string } | null>(null);
+  const [sttStatus, setSttStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+
+  useEffect(() => {
+    if (!isRecording) {
+      setSttStatus('idle');
+    }
+  }, [isRecording]);
 
   const currentTime = 0;
   const duration = 0;
@@ -316,10 +323,19 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           setSpeechDetected(true);
         });
 
+        // STT channel status listener (connecting -> connected / error)
+        const sttStatusUnsubscribe = await listen<{ status: 'idle' | 'connecting' | 'connected' | 'error' }>('stt-status', (event) => {
+          console.log('stt-status event received:', event);
+          if (event.payload?.status) {
+            setSttStatus(event.payload.status);
+          }
+        });
+
         unsubscribes = [
           transcriptErrorUnsubscribe,
           transcriptionErrorUnsubscribe,
-          speechDetectedUnsubscribe
+          speechDetectedUnsubscribe,
+          sttStatusUnsubscribe
         ];
         console.log('Recording event listeners set up successfully');
       } catch (error) {
@@ -484,6 +500,53 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                       />
                     ))}
                   </div>
+
+                  {/* STT Status Indicator */}
+                  {(isRecording || isStarting) && (
+                    <div className="flex items-center pl-1 pr-1">
+                      <div className="w-px h-6 bg-gray-200 mr-2" />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium cursor-default transition-all duration-200 border select-none ${
+                            sttStatus === 'connected'
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                              : sttStatus === 'error'
+                              ? 'bg-red-50 border-red-200 text-red-700'
+                              : 'bg-amber-50 border-amber-200 text-amber-700'
+                          }`}>
+                            {sttStatus === 'connected' ? (
+                              <>
+                                <span className="relative flex h-2 w-2">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                </span>
+                                <span className="font-semibold tracking-wide">STT Live</span>
+                              </>
+                            ) : sttStatus === 'error' ? (
+                              <>
+                                <span className="h-2 w-2 rounded-full bg-red-500"></span>
+                                <span>STT Error</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+                                <span>Connecting STT...</span>
+                              </>
+                            )}
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>
+                            {sttStatus === 'connected'
+                              ? 'Speech-to-Text streaming channel is active and listening.'
+                              : sttStatus === 'error'
+                              ? 'Failed to connect to Speech-to-Text channel. Please check network/API key.'
+                              : 'Connecting live Speech-to-Text WebSocket channel...'}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                  )}
                 </>
               )}
             </>

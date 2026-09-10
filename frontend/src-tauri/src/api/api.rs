@@ -30,6 +30,8 @@ pub struct ApiResponse<T> {
 pub struct Meeting {
     pub id: String,
     pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -342,6 +344,8 @@ pub async fn api_get_meetings<R: Runtime>(
                 .map(|m| Meeting {
                     id: m.id,
                     title: m.title,
+                    created_at: m.created_at.0.to_rfc3339(),
+                    updated_at: m.updated_at.0.to_rfc3339(),
                 })
                 .collect();
             Ok(result)
@@ -367,8 +371,9 @@ pub async fn api_search_transcripts<R: Runtime>(
     );
 
     let pool = state.db_manager.pool();
+    let current_user = *state.current_user_id.read().await;
 
-    match TranscriptsRepository::search_transcripts(pool, &query).await {
+    match TranscriptsRepository::search_transcripts_for_user(pool, &query, current_user).await {
         Ok(results) => {
             log_info!(
                 "Search completed successfully with {} results.",

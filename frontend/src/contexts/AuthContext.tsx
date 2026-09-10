@@ -27,33 +27,94 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const STORAGE_KEY = 'crestmeet_user_session';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  // Restore user session on app launch
-  const restoreSession = useCallback(async () => {
+  // Initialize user synchronously from localStorage so there is ZERO delay or loading screen flashing
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    if (typeof window === 'undefined') return null;
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        const parsed: AuthUser = JSON.parse(stored);
-        if (parsed?.id) {
-          const restored = await invoke<AuthUser | null>('auth_restore_session', {
-            userId: parsed.id,
-          });
-
-          if (restored) {
-            setUser(restored);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(restored));
-          } else {
-            // Session no longer valid in database
-            localStorage.removeItem(STORAGE_KEY);
-            setUser(null);
-          }
+        const parsed = JSON.parse(stored);
+        if (parsed?.id && parsed?.email) {
+          return parsed;
         }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  });
+
+  // If a valid session is already in localStorage, loading is false immediately
+  const [loading, setLoading] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.id && parsed?.email) return false;
+      }
+    } catch {
+      // ignore
+    }
+    return true;
+  });
+
+  // Restore and verify user session with backend
+  const restoreSession = useCallback(async () => {
+    console.log('[Auth] Restoring session...');
+    try {
+      if (typeof window === 'undefined') {
+        setLoading(false);
+        return;
+      }
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        let parsed: AuthUser | null = null;
+        try {
+          parsed = JSON.parse(stored);
+        } catch {
+          localStorage.removeItem(STORAGE_KEY);
+        }
+
+        if (parsed?.id) {
+          console.log('[Auth] Validating session in backend for user ID:', parsed.id);
+          // Optimistically ensure user is set
+          setUser(prev => prev || parsed);
+          setLoading(false);
+
+          try {
+            // Verify with backend Supabase without premature timeout
+            const restored = await invoke<AuthUser | null>('auth_restore_session', {
+              userId: parsed.id,
+              user_id: parsed.id,
+            });
+
+            if (restored) {
+              console.log('[Auth] Session verified with backend:', restored.email);
+              setUser(restored);
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(restored));
+            } else {
+              console.log('[Auth] User account no longer exists in database, logging out');
+              localStorage.removeItem(STORAGE_KEY);
+              setUser(null);
+            }
+          } catch (err) {
+            // If backend call fails due to temporary network/pool latency, keep optimistic session
+            console.warn('[Auth] Backend session check encountered an error, retaining cached session:', err);
+          }
+        } else {
+          localStorage.removeItem(STORAGE_KEY);
+          setUser(null);
+        }
+      } else {
+        console.log('[Auth] No stored session found, showing login view');
+        setUser(null);
       }
     } catch (err) {
       console.error('[Auth] Failed to restore session:', err);
+      setUser(null);
     } finally {
+      console.log('[Auth] restoreSession complete, setting loading to false');
       setLoading(false);
     }
   }, []);

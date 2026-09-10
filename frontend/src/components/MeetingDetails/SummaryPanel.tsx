@@ -10,7 +10,7 @@ import { SummaryUpdaterButtonGroup } from './SummaryUpdaterButtonGroup';
 import Analytics from '@/lib/analytics';
 import { useEffect, useRef, useState, RefObject } from 'react';
 import { toast } from 'sonner';
-import { Languages, ChevronDown } from 'lucide-react';
+import { Languages, ChevronDown, Calendar, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { LanguagePickerPopover } from '@/components/LanguagePickerPopover';
@@ -21,6 +21,12 @@ import {
   saveMeetingSummaryLanguage,
   SummaryLanguageStorage,
 } from '@/lib/summary-language-preferences';
+import {
+  formatMeetingDate,
+  formatMeetingTime,
+  getRelativeTime,
+  cleanMeetingTitle,
+} from '@/lib/dateUtils';
 
 interface SummaryPanelProps {
   meeting: {
@@ -254,19 +260,49 @@ export function SummaryPanel({
 
   return (
     <div className="flex-1 min-w-0 flex flex-col bg-white overflow-hidden">
-      {/* Title area */}
-      <div className="p-4 border-b border-gray-200">
-        {/* <EditableTitle
-          title={meetingTitle}
-          isEditing={isEditingTitle}
-          onStartEditing={onStartEditTitle}
-          onFinishEditing={onFinishEditTitle}
-          onChange={onTitleChange}
-        /> */}
+      {/* Title & Date Header Area */}
+      <div className="p-4 border-b border-gray-200 bg-white">
+        <div className="flex flex-col gap-2 mb-3">
+          {/* Editable Meeting Title */}
+          <div className="flex items-center justify-between gap-3">
+            <EditableTitle
+              title={cleanMeetingTitle(meetingTitle, meeting.created_at)}
+              isEditing={isEditingTitle}
+              onStartEditing={onStartEditTitle}
+              onFinishEditing={onFinishEditTitle}
+              onChange={onTitleChange}
+            />
+          </div>
+
+          {/* Formatted Date & Time Badges */}
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            {meeting.created_at && (
+              <>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 font-medium border border-slate-200/80">
+                  <Calendar className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                  <span>{formatMeetingDate(meeting.created_at)}</span>
+                </div>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-100 text-slate-600 border border-slate-200/80">
+                  <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span>{formatMeetingTime(meeting.created_at)}</span>
+                </div>
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 font-medium border border-indigo-200/60">
+                  {getRelativeTime(meeting.created_at)}
+                </span>
+              </>
+            )}
+
+            {transcripts?.length > 0 && (
+              <span className="text-[11px] text-slate-400 ml-auto hidden sm:inline">
+                {transcripts.length} {transcripts.length === 1 ? 'segment' : 'segments'}
+              </span>
+            )}
+          </div>
+        </div>
 
         {/* Button groups - only show when summary exists */}
         {aiSummary && !isSummaryLoading && (
-          <div className="flex items-center justify-center w-full pt-0 gap-2">
+          <div className="flex items-center justify-between w-full pt-3 border-t border-slate-100 gap-2">
             {/* Left-aligned: Summary Generator Button Group */}
             <div className="flex-shrink-0">
               <SummaryGeneratorButtonGroup

@@ -1,1 +1,2 @@
-# Target directory defaults to fast C: SSD
+[build]
+target-dir = "D:/meetily-target"

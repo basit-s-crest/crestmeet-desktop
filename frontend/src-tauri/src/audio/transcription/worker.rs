@@ -91,6 +91,7 @@ pub fn start_transcription_task<R: Runtime>(
         let input_finished = Arc::new(AtomicBool::new(false));
 
         info!("📊 Starting {} transcription worker{} (serial mode for ordered emission)", NUM_WORKERS, if NUM_WORKERS == 1 { "" } else { "s" });
+        let _ = app.emit("stt-status", serde_json::json!({ "status": "connected", "provider": "local" }));
 
         // Spawn worker tasks
         let mut worker_handles = Vec::new();

@@ -32,11 +32,13 @@ import Info from '../Info';
 import { ComplianceNotification } from '../ComplianceNotification';
 import { Input } from '../ui/input';
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '../ui/input-group';
+import { cleanMeetingTitle, formatMeetingDateTime } from '@/lib/dateUtils';
 
 interface SidebarItem {
   id: string;
   title: string;
   type: 'folder' | 'file';
+  created_at?: string;
   children?: SidebarItem[];
 }
 
@@ -606,8 +608,8 @@ const Sidebar: React.FC = () => {
               )}
             </>
           ) : (
-            <div className="flex flex-col w-full">
-              <div className="flex items-center w-full">
+            <div className="flex flex-col w-full min-w-0">
+              <div className="flex items-center w-full min-w-0">
                 {isMeetingItem ? (
                   <div className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-full mr-2 bg-gray-100">
                     <File className="w-3.5 h-3.5 text-gray-600" />
@@ -617,7 +619,16 @@ const Sidebar: React.FC = () => {
                     <Plus className="w-3.5 h-3.5 text-blue-600" />
                   </div>
                 )}
-                <span className="flex-1 break-words">{item.title}</span>
+                <div className="flex-1 min-w-0 pr-1">
+                  <p className="truncate text-sm font-medium leading-snug">
+                    {isMeetingItem ? cleanMeetingTitle(item.title, item.created_at) : item.title}
+                  </p>
+                  {isMeetingItem && item.created_at && (
+                    <p className="truncate text-[11px] text-gray-400 font-normal leading-tight mt-0.5">
+                      {formatMeetingDateTime(item.created_at)}
+                    </p>
+                  )}
+                </div>
                 {isMeetingItem && (
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
                     <button
@@ -744,13 +755,43 @@ const Sidebar: React.FC = () => {
                 {filteredSidebarItems.filter(item => item.type === 'folder').map(item => (
                   <div key={item.id}>
                     <div
-                      className="flex items-center transition-all duration-150 p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg"
+                      onClick={() => {
+                        if (item.id === 'meetings') {
+                          router.push('/meetings');
+                        }
+                      }}
+                      className="flex items-center justify-between transition-all duration-150 p-2.5 mx-3 mt-3 rounded-lg hover:bg-gray-100 cursor-pointer group"
+                      title="View all meeting notes"
                     >
-                      <NotebookPen className="w-4 h-4 mr-2 text-gray-600" />
-                      <span className="text-gray-700">{item.title}</span>
-                      {searchQuery && item.id === 'meetings' && isSearching && (
-                        <span className="ml-2 text-xs text-blue-500 animate-pulse">Searching...</span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <NotebookPen className="w-4 h-4 text-gray-700 group-hover:text-blue-600 transition-colors" />
+                        <span className="text-sm font-semibold text-gray-800 group-hover:text-blue-600 transition-colors">{item.title}</span>
+                        {meetings.length > 0 && (
+                          <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-semibold border border-gray-200">
+                            {meetings.length}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleFolder(item.id);
+                          }}
+                          className="p-1 hover:bg-gray-200 rounded text-gray-400 hover:text-gray-600 transition-colors"
+                          title={expandedFolders.has(item.id) ? "Collapse list" : "Expand list"}
+                        >
+                          {expandedFolders.has(item.id) ? (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                        {searchQuery && item.id === 'meetings' && isSearching && (
+                          <span className="ml-1 text-xs text-blue-500 animate-pulse">...</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}

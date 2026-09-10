@@ -18,3 +18,10 @@ tokio = { version = "1.32.0", features = ["full"] }
 
 [patch.crates-io]
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "51c3b43" }
+
+[profile.dev]
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = 0

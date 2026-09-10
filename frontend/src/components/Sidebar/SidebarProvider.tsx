@@ -5,18 +5,21 @@ import { usePathname, useRouter } from 'next/navigation';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { useAuth } from '@/contexts/AuthContext';
 
 
 interface SidebarItem {
   id: string;
   title: string;
   type: 'folder' | 'file';
+  created_at?: string;
   children?: SidebarItem[];
 }
 
 export interface CurrentMeeting {
   id: string;
   title: string;
+  created_at?: string;
 }
 
 // Search result type for transcript search
@@ -78,18 +81,24 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 
   // Use recording state from RecordingStateContext (single source of truth)
   const { isRecording } = useRecordingState();
+  const { user } = useAuth();
 
   const pathname = usePathname();
   const router = useRouter();
 
   // Extract fetchMeetings as a reusable function
   const fetchMeetings = React.useCallback(async () => {
+    if (!user) {
+      setMeetings([]);
+      return;
+    }
     if (serverAddress) {
       try {
-        const meetings = await invoke('api_get_meetings') as Array<{ id: string, title: string }>;
-        const transformedMeetings = meetings.map((meeting: any) => ({
+        const fetchedMeetings = await invoke('api_get_meetings') as Array<{ id: string, title: string, created_at?: string }>;
+        const transformedMeetings = (fetchedMeetings || []).map((meeting: any) => ({
           id: meeting.id,
-          title: meeting.title
+          title: meeting.title,
+          created_at: meeting.created_at,
         }));
         setMeetings(transformedMeetings);
         Analytics.trackBackendConnection(true);
@@ -99,11 +108,15 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         Analytics.trackBackendConnection(false, error instanceof Error ? error.message : 'Unknown error');
       }
     }
-  }, [serverAddress]);
+  }, [serverAddress, user]);
 
   useEffect(() => {
-    fetchMeetings();
-  }, [serverAddress, fetchMeetings]);
+    if (!user) {
+      setMeetings([]);
+    } else {
+      fetchMeetings();
+    }
+  }, [user?.id, serverAddress, fetchMeetings]);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -119,7 +132,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       title: 'Meeting Notes',
       type: 'folder' as const,
       children: [
-        ...meetings.map(meeting => ({ id: meeting.id, title: meeting.title, type: 'file' as const }))
+        ...meetings.map(meeting => ({
+          id: meeting.id,
+          title: meeting.title,
+          created_at: meeting.created_at,
+          type: 'file' as const,
+        }))
       ]
     },
   ];
