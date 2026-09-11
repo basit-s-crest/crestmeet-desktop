@@ -356,10 +356,15 @@ pub async fn api_process_transcript<R: Runtime>(
         if t.is_empty() { None } else { Some(t.to_string()) }
     });
 
+    let current_user = *state.current_user_id.read().await;
+
     // Create or reset the process entry in the database
-    SummaryProcessesRepository::create_or_reset_process(&pool, &m_id)
+    SummaryProcessesRepository::create_or_reset_process(&pool, &m_id, current_user)
         .await
-        .map_err(|e| format!("Failed to initialize process: {}", e))?;
+        .map_err(|e| {
+            log_error!("Failed to initialize process for {}: {}", &m_id, e);
+            format!("Failed to initialize process: {}", e)
+        })?;
 
     log_info!("✓ Summary process initialized for meeting_id: {}", &m_id);
 
@@ -375,9 +380,13 @@ pub async fn api_process_transcript<R: Runtime>(
         &model_name,
         chunk_size,
         overlap,
+        current_user,
     )
     .await
-    .map_err(|e| format!("Failed to save transcript data: {}", e))?;
+    .map_err(|e| {
+        log_error!("Failed to save transcript data for {}: {}", &m_id, e);
+        format!("Failed to save transcript data: {}", e)
+    })?;
 
     log_info!("✓ Transcript chunks saved for meeting_id: {}", &m_id);
 
@@ -394,6 +403,7 @@ pub async fn api_process_transcript<R: Runtime>(
             final_prompt,
             final_template_id,
             summary_language,
+            current_user,
         )
         .await;
     });

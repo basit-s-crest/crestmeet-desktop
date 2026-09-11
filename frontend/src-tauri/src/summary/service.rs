@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 use once_cell::sync::Lazy;
 
 // Global cache for model metadata (5 minute TTL)
@@ -301,11 +302,13 @@ impl SummaryService {
         custom_prompt: String,
         template_id: String,
         summary_language: Option<String>,
+        user_id: Option<Uuid>,
     ) {
         let start_time = Instant::now();
         info!(
-            "Starting background processing for meeting_id: {}",
-            meeting_id
+            "Starting background processing for meeting_id: {}, user_id: {:?}",
+            meeting_id,
+            user_id
         );
 
         // Register cancellation token for this meeting
@@ -320,20 +323,34 @@ impl SummaryService {
             }
         };
 
+        // Resolve effective user_id (fall back to meeting owner if not supplied)
+        let effective_user_id = match user_id {
+            Some(uid) => Some(uid),
+            None => {
+                sqlx::query_scalar::<_, Uuid>("SELECT user_id FROM meetings WHERE id = $1")
+                    .bind(&meeting_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .unwrap_or(None)
+            }
+        };
+
         // Validate and setup api_key, Flexible for Ollama, BuiltInAI, and CustomOpenAI
         let api_key = if provider == LLMProvider::Ollama || provider == LLMProvider::BuiltInAI || provider == LLMProvider::CustomOpenAI {
             // These providers don't require API keys from the standard database column
             String::new()
         } else {
-            match SettingsRepository::get_api_key(&pool, &model_provider).await {
+            match SettingsRepository::get_api_key_for_user(&pool, effective_user_id, &model_provider).await {
                 Ok(Some(key)) if !key.is_empty() => key,
                 Ok(None) | Ok(Some(_)) => {
-                    let err_msg = format!("API key not found for {}", &model_provider);
+                    let err_msg = format!("API key not found for {}. Please configure your API key in Settings.", &model_provider);
+                    error!("{}", err_msg);
                     Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
                     return;
                 }
                 Err(e) => {
                     let err_msg = format!("Failed to retrieve API key for {}: {}", &model_provider, e);
+                    error!("{}", err_msg);
                     Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
                     return;
                 }

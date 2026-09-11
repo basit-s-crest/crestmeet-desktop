@@ -5,6 +5,7 @@ use chrono::Utc;
 use serde_json::Value;
 use sqlx::PgPool;
 use tracing::{error, info as log_info};
+use uuid::Uuid;
 
 pub struct SummaryProcessesRepository;
 
@@ -87,16 +88,18 @@ impl SummaryProcessesRepository {
     pub async fn create_or_reset_process(
         pool: &PgPool,
         meeting_id: &str,
+        user_id: Option<Uuid>,
     ) -> Result<(), sqlx::Error> {
         log_info!(
-            "Creating or resetting summary process for meeting_id: {}",
-            meeting_id
+            "Creating or resetting summary process for meeting_id: {}, user_id: {:?}",
+            meeting_id,
+            user_id
         );
         let now = Utc::now();
-        sqlx::query(
+        let res = sqlx::query(
             r#"
-            INSERT INTO summary_processes (meeting_id, status, created_at, updated_at, start_time, result, error)
-            VALUES ($1, 'PENDING', $2, $3, $4, NULL, NULL)
+            INSERT INTO summary_processes (meeting_id, status, created_at, updated_at, start_time, result, error, user_id)
+            VALUES ($1, 'PENDING', $2, $3, $4, NULL, NULL, COALESCE($5, (SELECT user_id FROM meetings WHERE id = $1)))
             ON CONFLICT (meeting_id) DO UPDATE SET
                 status = 'PENDING',
                 updated_at = EXCLUDED.updated_at,
@@ -104,20 +107,31 @@ impl SummaryProcessesRepository {
                 result_backup = summary_processes.result,
                 result_backup_timestamp = EXCLUDED.updated_at,
                 result = summary_processes.result,
-                error = NULL
+                error = NULL,
+                user_id = COALESCE(EXCLUDED.user_id, summary_processes.user_id)
             "#
         )
         .bind(meeting_id)
         .bind(now)
         .bind(now)
         .bind(now)
+        .bind(user_id)
         .execute(pool)
-        .await?;
-        log_info!(
-            "Backed up existing summary before regeneration for meeting_id: {}",
-            meeting_id
-        );
-        Ok(())
+        .await;
+
+        match res {
+            Ok(_) => {
+                log_info!(
+                    "Backed up existing summary before regeneration for meeting_id: {}",
+                    meeting_id
+                );
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to create or reset summary process for {}: {}", meeting_id, e);
+                Err(e)
+            }
+        }
     }
 
     pub async fn update_process_completed(

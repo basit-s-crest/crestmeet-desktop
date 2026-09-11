@@ -27,37 +27,8 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const STORAGE_KEY = 'crestmeet_user_session';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // Initialize user synchronously from localStorage so there is ZERO delay or loading screen flashing
-  const [user, setUser] = useState<AuthUser | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed?.id && parsed?.email) {
-          return parsed;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return null;
-  });
-
-  // If a valid session is already in localStorage, loading is false immediately
-  const [loading, setLoading] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed?.id && parsed?.email) return false;
-      }
-    } catch {
-      // ignore
-    }
-    return true;
-  });
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // Restore and verify user session with backend
   const restoreSession = useCallback(async () => {

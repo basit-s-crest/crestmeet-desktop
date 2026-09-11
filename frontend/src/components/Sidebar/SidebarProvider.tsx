@@ -268,9 +268,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error(`Polling error for ${meetingId}:`, error);
         // Report error to callback
+        const errStr = error instanceof Error
+          ? error.message
+          : typeof error === 'string'
+          ? error
+          : (error as any)?.message || 'Unknown error';
         onUpdate({
           status: 'error',
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: errStr
         });
         clearInterval(pollInterval);
         setActiveSummaryPolls(prev => {

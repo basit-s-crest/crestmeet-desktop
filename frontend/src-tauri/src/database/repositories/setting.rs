@@ -199,14 +199,21 @@ impl SettingsRepository {
                 "SELECT \"{}\" FROM settings WHERE user_id = $1 LIMIT 1",
                 api_key_column
             );
-            sqlx::query_scalar(&query).bind(uid).fetch_optional(pool).await
-        } else {
-            let query = format!(
-                "SELECT \"{}\" FROM settings LIMIT 1",
-                api_key_column
-            );
-            sqlx::query_scalar(&query).fetch_optional(pool).await
+            if let Ok(Some(key)) = sqlx::query_scalar::<_, Option<String>>(&query).bind(uid).fetch_optional(pool).await {
+                if let Some(k) = key {
+                    if !k.trim().is_empty() {
+                        return Ok(Some(k));
+                    }
+                }
+            }
         }
+
+        // Fallback: look for any configured row with a non-empty API key for this provider
+        let fallback_query = format!(
+            "SELECT \"{}\" FROM settings WHERE \"{}\" IS NOT NULL AND \"{}\" != '' LIMIT 1",
+            api_key_column, api_key_column, api_key_column
+        );
+        sqlx::query_scalar(&fallback_query).fetch_optional(pool).await
     }
 
     pub async fn get_api_key(

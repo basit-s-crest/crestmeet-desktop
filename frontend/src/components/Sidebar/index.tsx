@@ -88,6 +88,11 @@ const Sidebar: React.FC = () => {
     currentTitle: ''
   });
   const [editingTitle, setEditingTitle] = useState<string>('');
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Ensure 'meetings' folder is always expanded
   useEffect(() => {
@@ -845,7 +850,7 @@ const Sidebar: React.FC = () => {
               </button>
             )}
 
-            {user && (
+            {mounted && user && (
               <div className="w-full px-2.5 py-1.5 mt-2 mb-1 flex items-center justify-between text-xs bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
                 <div className="flex items-center gap-1.5 truncate max-w-[145px]" title={user.email || ''}>
                   <UserIcon className="w-3.5 h-3.5 text-indigo-500 shrink-0" />

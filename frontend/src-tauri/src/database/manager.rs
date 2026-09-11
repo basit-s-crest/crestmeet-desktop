@@ -177,6 +177,17 @@ impl DatabaseManager {
             ALTER TABLE licensing ADD COLUMN IF NOT EXISTS user_id UUID;
             ALTER TABLE meeting_notes ADD COLUMN IF NOT EXISTS user_id UUID;
 
+            -- Ensure summary_processes backup and metric columns exist
+            ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS result_backup TEXT;
+            ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS result_backup_timestamp TIMESTAMPTZ;
+            ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS chunk_count BIGINT DEFAULT 0;
+            ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS processing_time DOUBLE PRECISION DEFAULT 0;
+            ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS metadata TEXT;
+
+            -- Ensure additional feature columns exist
+            ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS speaker TEXT;
+            ALTER TABLE settings ADD COLUMN IF NOT EXISTS "geminiApiKey" TEXT;
+
             CREATE INDEX IF NOT EXISTS idx_meetings_user_id ON meetings(user_id);
             CREATE INDEX IF NOT EXISTS idx_transcripts_user_id ON transcripts(user_id);
             CREATE INDEX IF NOT EXISTS idx_meeting_notes_user_id ON meeting_notes(user_id);

@@ -1,176 +1,71 @@
-# Meetily - Frontend
+# CrestMeet - Frontend & Desktop App
 
-A modern desktop application for recording, transcribing, and analyzing meetings with AI assistance. Built with Next.js and Tauri for a native desktop experience.
+Frontend application and Tauri desktop layer for **CrestMeet**. Built with **Next.js 14** and **Tauri v2** for a responsive, native desktop experience.
 
-## Features
+---
 
-- Real-time audio recording from both microphone and system audio
-- Live transcription using Whisper ASR (locally running)
-- Native desktop integration using Tauri
-- Speaker diarization support
-- Rich text editor for note-taking
-- Privacy-focused: All processing happens locally
-
-## Prerequisites
-
-### For macOS:
-- Node.js (v18 or later)
-- Rust (latest stable)
-- pnpm (v8 or later)
-- [Xcode Command Line Tools](https://developer.apple.com/download/all/?q=xcode)
-
-### For Windows:
-- Node.js (v18 or later)
-- Rust (latest stable)
-- pnpm (v8 or later)
-- Visual Studio Build Tools with C++ development tools
-- Windows 10 or later
-
-
-## Project Structure
+## Architecture Overview
 
 ```
-/frontend
-├── src/                   # Next.js frontend code
-├── src-tauri/             # Rust backend for Tauri
-├── public/                # Static assets
-└── package.json           # Project dependencies
+frontend/
+├── src/               # Next.js frontend application (React, TailwindCSS, Radix UI)
+│   ├── app/           # App router pages (dashboard, meetings, settings)
+│   ├── components/    # Reusable UI components
+│   ├── contexts/      # State providers (Auth, Audio, Config)
+│   └── hooks/         # Custom React hooks
+├── src-tauri/         # Rust native desktop layer
+│   ├── src/           # Rust source code (audio capture, DB, summaries)
+│   └── Cargo.toml     # Rust dependencies & configuration
+├── public/            # Static assets
+└── package.json       # Frontend dependencies & scripts
 ```
 
-## Installation
+---
 
-### For macOS:
+## Development Setup
 
-1. Install prerequisites:
-   ```bash
-   # Install Homebrew if not already installed
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   
-   # Install Node.js
-   brew install node
-   
-   # Install Rust
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   
-   # Install pnpm
-   npm install -g pnpm
-   
-   # Install Xcode Command Line Tools
-   xcode-select --install
-   ```
+### Prerequisites
 
-2. Clone the repository and navigate to the frontend directory:
-   ```bash
-   git clone https://github.com/Zackriya-Solutions/meeting-minutes
-   cd meeting-minutes/frontend
-   ```
-  
+- **Node.js**: `v18` or higher
+- **pnpm**: `v8` or higher (`npm install -g pnpm`)
+- **Rust**: Latest stable toolchain (`rustup`)
+- **Platform C++ Build Tools**:
+  - **Windows**: Visual Studio Build Tools with C++ workload
+  - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
+  - **Linux**: Standard build essentials and WebKit2GTK libraries
 
-3. Install dependencies:
-   ```bash
-   pnpm install
-   ```
+### Installation
 
-### For Windows:
-
-1. Install prerequisites:
-   - Install [Node.js](https://nodejs.org/) (v18 or later)
-   - Install [Rust](https://www.rust-lang.org/tools/install)
-   - Install pnpm: `npm install -g pnpm`
-   - Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with C++ development tools
-
-2. Clone the repository and navigate to the frontend directory:
-   ```cmd
-   git clone https://github.com/Zackriya-Solutions/meeting-minutes
-   cd meeting-minutes/frontend
-   ```
-
-3. Install dependencies:
-   ```cmd
-   pnpm install
-   ```
-
-## Running the App
-
-### For macOS:
-
-Use the provided script to run the app in development mode:
 ```bash
-./clean_run.sh
+pnpm install
 ```
 
-To build a production version:
-```bash
-./clean_build.sh
-```
+### Running Locally
 
-You can specify the log level (info, debug, trace):
-```bash
-./clean_run.sh debug
-```
+Run both the Next.js frontend and the Tauri desktop window:
 
-### For Windows:
-
-Use the provided script to run the app in development mode:
-```cmd
-clean_run_windows.bat
-```
-
-To build a production version:
-```cmd
-clean_build_windows.bat
-```
-
-You can also use the package scripts directly:
 ```bash
 pnpm run tauri:dev
+```
+
+To run only the web interface in the browser (for UI tweaking):
+
+```bash
+pnpm run dev
+```
+
+### Production Build
+
+Create an optimized desktop installer (MSI / NSIS on Windows, DMG on macOS, AppImage / DEB on Linux):
+
+```bash
 pnpm run tauri:build
 ```
 
-## Local Transcription
+---
 
-Current Meetily does not require a separate FastAPI service, Docker backend, or manually started whisper-server process. Local transcription is handled by the Rust/Tauri desktop app.
+## Audio & Transcription Pipeline
 
-For build and acceleration details, see:
-
-- [Building from Source](../docs/BUILDING.md)
-- [GPU Acceleration](../docs/GPU_ACCELERATION.md)
-- [Architecture](../docs/architecture.md)
-
-## Development
-
-### Frontend (Next.js)
-- The frontend is built with Next.js and Tailwind CSS
-- Source code is in the `src/` directory
-- To run only the frontend: `pnpm run dev`
-
-### Backend (Tauri)
-- The Rust backend is in the `src-tauri/` directory
-- Handles audio capture, file system access, transcription, storage, and native integrations
-- To run only the Tauri development server: `pnpm run tauri:dev`
-
-## Troubleshooting
-
-### Common Issues on macOS
-- If you encounter permission issues with scripts, make them executable:
-  ```bash
-  chmod +x clean_run.sh clean_build.sh
-  ```
-- For microphone access issues, ensure the app has microphone permissions in System Preferences
-
-### Common Issues on Windows
-- If you encounter build errors, ensure Visual Studio Build Tools are properly installed
-- For audio capture issues, check Windows privacy settings for microphone access
-- If the app fails to start, try running Command Prompt as administrator
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+- **Audio Capture**: Managed by the Rust layer via `cpal`, capturing both microphone and system audio (WASAPI loopback on Windows).
+- **Transcription**: Supports local Whisper models as well as cloud-based real-time transcription via Deepgram.
+- **AI Summaries**: Processed asynchronously in Rust and streamed/polled by the frontend interface.
