@@ -58,6 +58,52 @@ export default function PageContent({
   const [isRecording] = useState(false);
   const [summaryResponse] = useState<SummaryResponse | null>(null);
 
+  // Resizable panel width state (persisted in localStorage)
+  const [transcriptWidth, setTranscriptWidth] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('crestmeet_transcript_panel_width');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 260 && parsed <= 1200) {
+          return parsed;
+        }
+      }
+    }
+    return 380;
+  });
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+
+  const startResizing = (mouseDownEvent: React.MouseEvent) => {
+    mouseDownEvent.preventDefault();
+    setIsDragging(true);
+
+    const startX = mouseDownEvent.clientX;
+    const startWidth = transcriptWidth;
+
+    const onMouseMove = (mouseMoveEvent: MouseEvent) => {
+      const delta = mouseMoveEvent.clientX - startX;
+      const minW = 260;
+      const maxW = Math.max(minW, window.innerWidth - 380);
+      const newWidth = Math.min(Math.max(minW, startWidth + delta), maxW);
+      setTranscriptWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      setIsDragging(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      setTranscriptWidth((finalW) => {
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('crestmeet_transcript_panel_width', String(finalW));
+        }
+        return finalW;
+      });
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
   // Ref to store the modal open function from SummaryGeneratorButtonGroup
   const openModelSettingsRef = useRef<(() => void) | null>(null);
 
@@ -170,7 +216,7 @@ export default function PageContent({
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="flex flex-col h-screen bg-gray-50"
     >
-      <div className="flex flex-1 overflow-hidden">
+      <div className={`flex flex-1 overflow-hidden ${isDragging ? 'select-none cursor-col-resize' : ''}`}>
         <TranscriptPanel
           transcripts={meetingData.transcripts}
           customPrompt={customPrompt}
@@ -191,7 +237,21 @@ export default function PageContent({
           meetingId={meeting.id}
           meetingFolderPath={meeting.folder_path}
           onRefetchTranscripts={onRefetchTranscripts}
+          width={transcriptWidth}
         />
+
+        {/* Draggable Divider Handle - slim 1px line with comfortable hit area */}
+        <div
+          onMouseDown={startResizing}
+          title="Drag to resize panels"
+          className={`relative w-[1px] bg-gray-200 hover:bg-blue-500 transition-colors cursor-col-resize z-20 shrink-0 select-none ${
+            isDragging ? 'bg-blue-600' : ''
+          }`}
+        >
+          {/* Invisible expanded hit area for effortless grabbing */}
+          <div className="absolute inset-y-0 -left-1.5 -right-1.5 cursor-col-resize" />
+        </div>
+
         <SummaryPanel
           meeting={meeting}
           meetingTitle={meetingData.meetingTitle}

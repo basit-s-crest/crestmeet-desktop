@@ -4,6 +4,7 @@ import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
+import { MeetingVideoPlayer } from './MeetingVideoPlayer';
 import { useMemo } from 'react';
 
 interface TranscriptPanelProps {
@@ -28,6 +29,9 @@ interface TranscriptPanelProps {
   meetingId?: string;
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
+
+  // Resizable width in pixels
+  width?: number;
 }
 
 export function TranscriptPanel({
@@ -48,6 +52,7 @@ export function TranscriptPanel({
   meetingId,
   meetingFolderPath,
   onRefetchTranscripts,
+  width,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
@@ -65,7 +70,12 @@ export function TranscriptPanel({
   }, [transcripts, usePagination, segments]);
 
   return (
-    <div className="hidden md:flex md:w-1/4 lg:w-1/3 min-w-0 border-r border-gray-200 bg-white flex-col relative shrink-0">
+    <div
+      className={`hidden md:flex min-w-0 bg-white flex-col relative shrink-0 ${
+        width ? '' : 'md:w-1/4 lg:w-1/3 border-r border-gray-200'
+      }`}
+      style={{ width: width ? `${width}px` : undefined }}
+    >
       {/* Title area */}
       <div className="p-4 border-b border-gray-200">
         <TranscriptButtonGroup
@@ -77,6 +87,9 @@ export function TranscriptPanel({
           onRefetchTranscripts={onRefetchTranscripts}
         />
       </div>
+
+      {/* Meeting Screen Recording Video Player (if video was captured) */}
+      <MeetingVideoPlayer folderPath={meetingFolderPath} />
 
       {/* Transcript content - use virtualized view for better performance */}
       <div className="flex-1 overflow-hidden pb-4">

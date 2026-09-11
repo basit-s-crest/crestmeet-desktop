@@ -3,13 +3,14 @@
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { Play, Pause, Square, Mic, AlertCircle, X } from 'lucide-react';
+import { Play, Pause, Square, Mic, AlertCircle, X, Video, VideoOff } from 'lucide-react';
 import { ProcessRequest, SummaryResponse } from '@/types/summary';
 import { listen } from '@tauri-apps/api/event';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { useScreenRecording } from '@/hooks/useScreenRecording';
 
 interface RecordingControlsProps {
   isRecording: boolean;
@@ -44,6 +45,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   // Use global recording state context for pause state (syncs with tray operations)
   const recordingState = useRecordingState();
   const isPaused = recordingState.isPaused;
+  const { isVideoEnabled, setIsVideoEnabled, isCapturing, startScreenCapture } = useScreenRecording();
 
   const [showPlayback, setShowPlayback] = useState(false);
   const [recordingPath, setRecordingPath] = useState<string | null>(null);
@@ -100,6 +102,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     setShowPlayback(false);
     setTranscript(''); // Clear any previous transcript
     setSpeechDetected(false); // Reset speech detection on new recording
+
+    // If video recording is enabled, launch screen capture immediately on user gesture
+    const isVideoActive =
+      (typeof window !== 'undefined' && localStorage.getItem('crestmeet_video_recording_enabled') === 'true') ||
+      isVideoEnabled;
+    if (isVideoActive) {
+      console.log('🎥 Video recording enabled - launching screen capture immediately on user click...');
+      const ok = await startScreenCapture();
+      if (!ok) {
+        console.warn('Screen capture was not started, proceeding with audio only.');
+      }
+    }
 
     try {
       // Call the validation callback which will:
@@ -404,29 +418,56 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
               ) : (
                 <>
                   {!isRecording ? (
-                    // Start recording button
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={() => {
-                            Analytics.trackButtonClick('start_recording', 'recording_controls');
-                            handleStartRecording();
-                          }}
-                          disabled={isStarting || isProcessing || isRecordingDisabled || isValidatingModel}
-                          className={`w-12 h-12 flex items-center justify-center ${isStarting || isProcessing || isValidatingModel ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600'
-                            } rounded-full text-white transition-colors relative`}
-                        >
-                          {isValidatingModel ? (
-                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                          ) : (
-                            <Mic size={20} />
-                          )}
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Start recording</p>
-                      </TooltipContent>
-                    </Tooltip>
+                    // Start recording button and video toggle
+                    <div className="flex items-center space-x-2">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            onClick={() => {
+                              Analytics.trackButtonClick('start_recording', 'recording_controls');
+                              handleStartRecording();
+                            }}
+                            disabled={isStarting || isProcessing || isRecordingDisabled || isValidatingModel}
+                            className={`w-12 h-12 flex items-center justify-center ${isStarting || isProcessing || isValidatingModel ? 'bg-gray-400' : 'bg-red-500 hover:bg-red-600'
+                              } rounded-full text-white transition-colors relative`}
+                          >
+                            {isValidatingModel ? (
+                              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                            ) : (
+                              <Mic size={20} />
+                            )}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Start recording</p>
+                        </TooltipContent>
+                      </Tooltip>
+
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextVal = !isVideoEnabled;
+                              setIsVideoEnabled(nextVal);
+                              if (typeof window !== 'undefined') {
+                                localStorage.setItem('crestmeet_video_recording_enabled', String(nextVal));
+                              }
+                            }}
+                            className={`w-10 h-10 flex items-center justify-center rounded-full transition-all border ${
+                              isVideoEnabled
+                                ? 'bg-blue-600 border-blue-600 text-white shadow-sm hover:bg-blue-700'
+                                : 'bg-white border-gray-300 text-gray-500 hover:border-gray-400 hover:bg-gray-50'
+                            }`}
+                          >
+                            {isVideoEnabled ? <Video size={18} /> : <VideoOff size={18} />}
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>{isVideoEnabled ? 'Screen video recording enabled (Click to disable)' : 'Screen video recording disabled (Click to enable)'}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
                   ) : (
                     // Recording controls (pause/resume + stop)
                     <>
@@ -543,6 +584,27 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                               ? 'Failed to connect to Speech-to-Text channel. Please check network/API key.'
                               : 'Connecting live Speech-to-Text WebSocket channel...'}
                           </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </div>
+                  )}
+
+                  {/* Video Recording Indicator */}
+                  {isRecording && isCapturing && (
+                    <div className="flex items-center pl-1 pr-1">
+                      <div className="w-px h-6 bg-gray-200 mr-2" />
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium cursor-default transition-all duration-200 border select-none bg-blue-50 border-blue-200 text-blue-700">
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                            </span>
+                            <span className="font-semibold tracking-wide">REC Video</span>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Screen/Window video capture is active.</p>
                         </TooltipContent>
                       </Tooltip>
                     </div>

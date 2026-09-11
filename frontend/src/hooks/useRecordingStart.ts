@@ -8,6 +8,7 @@ import { recordingService } from '@/services/recordingService';
 import Analytics from '@/lib/analytics';
 import { showRecordingNotification } from '@/lib/recordingNotification';
 import { toast } from 'sonner';
+import { useScreenRecording } from '@/hooks/useScreenRecording';
 
 interface UseRecordingStartReturn {
   handleRecordingStart: () => Promise<void>;
@@ -31,52 +32,49 @@ export function useRecordingStart(
   setIsRecording: (value: boolean) => void,
   showModal?: (name: any, message?: string) => void
 ): UseRecordingStartReturn {
-  const [isAutoStarting, setIsAutoStarting] = useState(false);
+  const [isAutoStarting, setIsAutoStarting] = useState<boolean>(false);
 
   const { clearTranscripts, setMeetingTitle } = useTranscripts();
   const { setIsMeetingActive } = useSidebar();
-  const { selectedDevices } = useConfig();
+  const { transcriptModelConfig, selectedDevices } = useConfig();
   const { setStatus } = useRecordingState();
+  const { isVideoEnabled, startScreenCapture } = useScreenRecording();
 
-  // Generate meeting title with human-readable timestamp
-  const generateMeetingTitle = useCallback(() => {
+  // Helper function to generate meeting title
+  const generateMeetingTitle = useCallback((): string => {
     const now = new Date();
-    const dateFormatted = now.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
-    const timeFormatted = now.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-    return `Meeting • ${dateFormatted}, ${timeFormatted}`;
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = String(now.getFullYear()).slice(-2);
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+
+    return `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
   }, []);
 
-  // Validate transcription configuration (Deepgram API key)
+  // Helper function to check if cloud transcription is properly configured
   const checkTranscriptionReady = useCallback(async (): Promise<boolean> => {
     try {
-      const config = await invoke<{ provider: string; model: string; apiKey?: string; api_key?: string } | null>('api_get_transcript_config');
-      const provider = config?.provider || 'deepgram';
-      const apiKey = config?.apiKey?.trim() || config?.api_key?.trim();
+      const provider = transcriptModelConfig?.provider || 'whisper';
 
-      if (provider === 'deepgram' && !apiKey) {
-        toast.error('Deepgram API Key Required', {
-          description: 'Please enter your Deepgram API Key in Settings to start recording.',
-          duration: 6000,
-        });
-        showModal?.('modelSelector', 'Please enter your Deepgram API Key to enable transcription.');
-        Analytics.trackButtonClick('start_recording_blocked_missing_api_key', 'home_page');
-        return false;
+      // Only check for Deepgram API key if Deepgram is selected
+      if (provider === 'deepgram') {
+        const apiKey = await invoke('api_get_transcript_api_key', { provider: 'deepgram' }) as string;
+        if (!apiKey || apiKey.trim() === '') {
+          console.warn('Deepgram API key is missing - blocking recording start');
+          toast.error('Deepgram API key is missing. Please configure it in Settings.');
+          Analytics.trackButtonClick('start_recording_blocked_missing_api_key', 'home_page');
+          return false;
+        }
       }
 
       return true;
     } catch (error) {
-      console.error('Failed to validate transcription config:', error);
-      return true;
+      console.error('Failed to check transcription readiness:', error);
+      return true; // Allow to proceed on error to avoid blocking offline usage
     }
-  }, [showModal]);
+  }, [transcriptModelConfig]);
 
   // Handle manual recording start (from button click)
   const handleRecordingStart = useCallback(async () => {
@@ -94,6 +92,15 @@ export function useRecordingStart(
 
       const randomTitle = generateMeetingTitle();
       setMeetingTitle(randomTitle);
+
+      // If user enabled video recording, prompt for screen capture
+      const isVideoActive =
+        (typeof window !== "undefined" && localStorage.getItem("crestmeet_video_recording_enabled") === "true") ||
+        isVideoEnabled;
+      if (isVideoActive) {
+        console.log('🎥 Video recording enabled - starting screen capture...');
+        await startScreenCapture();
+      }
 
       // Set STARTING status before initiating backend recording
       setStatus(RecordingStatus.STARTING, 'Initializing recording...');

@@ -86,15 +86,27 @@ const TranscriptSegment = memo(function TranscriptSegment({
         <div id={`segment-${id}`} className="mb-3">
             <div className="flex items-start gap-2">
                 <Tooltip>
-                    <TooltipTrigger>
-                        <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
-                            {formatRecordingTime(timestamp)}
-                        </span>
+                    <TooltipTrigger asChild>
+                        <button
+                            type="button"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (typeof window !== 'undefined' && typeof timestamp === 'number') {
+                                    window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: timestamp } }));
+                                }
+                            }}
+                            className="text-xs text-gray-400 hover:text-blue-600 hover:bg-blue-50 px-1 py-0.5 rounded font-mono transition-colors mt-0.5 flex-shrink-0 min-w-[50px] text-left cursor-pointer group"
+                        >
+                            <span className="group-hover:underline">{formatRecordingTime(timestamp)}</span>
+                        </button>
                     </TooltipTrigger>
                     <TooltipContent>
-                        {confidence !== undefined && showConfidence && (
-                            <ConfidenceIndicator confidence={confidence} showIndicator={showConfidence} />
-                        )}
+                        <div className="space-y-1">
+                            <p className="text-xs">Click to jump video to this moment</p>
+                            {confidence !== undefined && showConfidence && (
+                                <ConfidenceIndicator confidence={confidence} showIndicator={showConfidence} />
+                            )}
+                        </div>
                     </TooltipContent>
                 </Tooltip>
                 <div className="flex-1">

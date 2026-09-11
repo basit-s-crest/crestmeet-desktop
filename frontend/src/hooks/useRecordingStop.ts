@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
@@ -7,6 +8,7 @@ import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
 import { storageService } from '@/services/storageService';
 import { transcriptService } from '@/services/transcriptService';
+import { useScreenRecording } from '@/hooks/useScreenRecording';
 import Analytics from '@/lib/analytics';
 import {
   applyPinnedSummaryLanguageToMeeting,
@@ -68,6 +70,7 @@ export function useRecordingStop(
   } = useSidebar();
 
   const router = useRouter();
+  const { stopScreenCapture } = useScreenRecording();
 
   // Guard to prevent duplicate/concurrent stop calls (e.g., from UI and tray simultaneously)
   const stopInProgressRef = useRef(false);
@@ -134,6 +137,9 @@ export function useRecordingStop(
     setIsRecording(false);
     setIsRecordingDisabled(true);
     const stopStartTime = Date.now();
+
+    // Immediately stop screen capture and start assembling video blob
+    const videoBlobPromise = stopScreenCapture();
 
     try {
       console.log('Post-stop processing (new implementation)...', {
@@ -253,6 +259,29 @@ export function useRecordingStop(
         });
 
         try {
+          // If video was recorded, save it to the meeting folder
+          try {
+            const videoBlob = await videoBlobPromise;
+            if (videoBlob && folderPath) {
+              console.log(`🎥 Saving recorded meeting video (${videoBlob.size} bytes) to ${folderPath}...`);
+              const buffer = await videoBlob.arrayBuffer();
+              const videoData = Array.from(new Uint8Array(buffer));
+              await invoke('api_save_meeting_video', { folderPath, videoData });
+              console.log('✅ Recorded meeting video saved successfully');
+
+              // Automatically merge audio + video with FFmpeg in the background
+              try {
+                console.log(`🎬 Merging meeting video and audio in ${folderPath}...`);
+                await invoke('api_merge_meeting_video_and_audio', { folderPath });
+                console.log('✅ Successfully merged meeting video with audio');
+              } catch (mergeErr) {
+                console.warn('Could not merge video and audio (will use raw video):', mergeErr);
+              }
+            }
+          } catch (videoErr) {
+            console.error('Failed to save meeting video:', videoErr);
+          }
+
           const responseData = await storageService.saveMeeting(
             savedMeetingName || meetingTitle || 'New Meeting',  // PREFER savedMeetingName (backend source)
             freshTranscripts,

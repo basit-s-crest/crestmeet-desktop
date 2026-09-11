@@ -48,6 +48,7 @@ pub mod state;
 pub mod summary;
 pub mod tray;
 pub mod utils;
+pub mod video;
 pub mod whisper_engine;
 
 use audio::{list_audio_devices, AudioDevice, trigger_audio_permission};
@@ -675,6 +676,11 @@ pub fn run() {
             summary::template_commands::api_list_templates,
             summary::template_commands::api_get_template_details,
             summary::template_commands::api_validate_template,
+            // Video commands
+            video::commands::api_save_meeting_video,
+            video::commands::api_check_meeting_video,
+            video::commands::api_load_meeting_video_bytes,
+            video::commands::api_merge_meeting_video_and_audio,
             // Built-in AI commands
             summary::summary_engine::commands::builtin_ai_list_models,
             summary::summary_engine::commands::builtin_ai_get_model_info,

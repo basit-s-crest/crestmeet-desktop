@@ -283,25 +283,40 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
           >
             <div className="flex items-start gap-2">
               <Tooltip>
-                <TooltipTrigger>
-                  <span className="text-xs text-gray-400 mt-1 flex-shrink-0 min-w-[50px]">
-                    {transcript.audio_start_time !== undefined
-                      ? formatRecordingTime(transcript.audio_start_time)
-                      : transcript.timestamp}
-                  </span>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const seekTime = transcript.audio_start_time;
+                      if (typeof window !== 'undefined' && typeof seekTime === 'number') {
+                        window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: seekTime } }));
+                      }
+                    }}
+                    className="text-xs text-gray-400 hover:text-blue-600 hover:bg-blue-50 px-1 py-0.5 rounded font-mono transition-colors mt-0.5 flex-shrink-0 min-w-[50px] text-left cursor-pointer group"
+                  >
+                    <span className="group-hover:underline">
+                      {transcript.audio_start_time !== undefined
+                        ? formatRecordingTime(transcript.audio_start_time)
+                        : transcript.timestamp}
+                    </span>
+                  </button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  {transcript.duration !== undefined && (
-                    <span className="text-xs text-gray-400">
-                      {transcript.duration.toFixed(1)}s
-                      {transcript.confidence !== undefined && (
-                        <ConfidenceIndicator
-                          confidence={transcript.confidence}
-                          showIndicator={showConfidence}
-                        />
-                      )}
-                    </span>
-                  )}
+                  <div className="space-y-1">
+                    <p className="text-xs">Click to jump video to this moment</p>
+                    {transcript.duration !== undefined && (
+                      <span className="text-xs text-gray-400">
+                        {transcript.duration.toFixed(1)}s
+                        {transcript.confidence !== undefined && (
+                          <ConfidenceIndicator
+                            confidence={transcript.confidence}
+                            showIndicator={showConfidence}
+                          />
+                        )}
+                      </span>
+                    )}
+                  </div>
                 </TooltipContent>
               </Tooltip>
               <div className="flex-1">
