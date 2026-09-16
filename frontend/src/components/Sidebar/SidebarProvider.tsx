@@ -131,14 +131,6 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       id: 'meetings',
       title: 'Meeting Notes',
       type: 'folder' as const,
-      children: [
-        ...meetings.map(meeting => ({
-          id: meeting.id,
-          title: meeting.title,
-          created_at: meeting.created_at,
-          type: 'file' as const,
-        }))
-      ]
     },
   ];
 

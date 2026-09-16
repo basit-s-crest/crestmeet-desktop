@@ -27,6 +27,7 @@ import {
   getRelativeTime,
   cleanMeetingTitle,
 } from '@/lib/dateUtils';
+import { ScheduleFollowUpCard } from './ScheduleFollowUpCard';
 
 interface SummaryPanelProps {
   meeting: {
@@ -393,6 +394,19 @@ export function SummaryPanel({
               languageSlot={transcripts.length > 0 ? languageSlot : undefined}
             />
           </div>
+          {/* Schedule Follow-up card if transcripts exist */}
+          {transcripts?.length > 0 && (
+            <div className="max-w-4xl mx-auto w-full px-6">
+              <ScheduleFollowUpCard
+                meetingId={meeting.id}
+                meetingTitle={meetingTitle}
+                hasTranscripts={transcripts?.length > 0}
+                hasSummary={!!aiSummary}
+                summaryStatus={summaryStatus}
+              />
+            </div>
+          )}
+
           {/* Empty state message */}
           <EmptyStateSummary
             onGenerate={() => onGenerateSummary(customPrompt)}
@@ -448,6 +462,14 @@ export function SummaryPanel({
             </div>
           )}
           <div className="p-6 w-full">
+            <ScheduleFollowUpCard
+              meetingId={meeting.id}
+              meetingTitle={meetingTitle}
+              hasTranscripts={transcripts?.length > 0}
+              hasSummary={!!aiSummary}
+              summaryStatus={summaryStatus}
+            />
+
             <BlockNoteSummaryView
               ref={summaryRef}
               summaryData={aiSummary}

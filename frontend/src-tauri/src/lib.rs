@@ -36,6 +36,7 @@ pub mod config;
 pub mod console_utils;
 pub mod database;
 pub mod deepgram;
+pub mod google_calendar;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -759,6 +760,13 @@ pub fn run() {
             audio::import::start_import_audio_command,
             audio::import::cancel_import_command,
             audio::import::is_import_in_progress_command,
+            // Google Calendar commands
+            google_calendar::api_google_calendar_get_status,
+            google_calendar::api_google_calendar_start_auth,
+            google_calendar::api_google_calendar_disconnect,
+            google_calendar::api_google_calendar_create_event,
+            // Follow-up / Rescheduling extraction
+            summary::reschedule_extractor::api_extract_reschedule_info,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
