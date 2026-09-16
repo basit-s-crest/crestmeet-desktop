@@ -32,6 +32,7 @@ pub(crate) use perf_trace;
 pub mod analytics;
 pub mod api;
 pub mod audio;
+pub mod chat;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -767,6 +768,10 @@ pub fn run() {
             google_calendar::api_google_calendar_create_event,
             // Follow-up / Rescheduling extraction
             summary::reschedule_extractor::api_extract_reschedule_info,
+            // Cross-Meeting AI Chatbot commands
+            chat::api_chat_send_message,
+            chat::api_chat_get_history,
+            chat::api_chat_clear_history,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

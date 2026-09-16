@@ -188,9 +188,20 @@ impl DatabaseManager {
             ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS speaker TEXT;
             ALTER TABLE settings ADD COLUMN IF NOT EXISTS "geminiApiKey" TEXT;
 
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id TEXT PRIMARY KEY,
+                user_id UUID,
+                chat_session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                citations TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
             CREATE INDEX IF NOT EXISTS idx_meetings_user_id ON meetings(user_id);
             CREATE INDEX IF NOT EXISTS idx_transcripts_user_id ON transcripts(user_id);
             CREATE INDEX IF NOT EXISTS idx_meeting_notes_user_id ON meeting_notes(user_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(user_id, chat_session_id, created_at ASC);
         "#;
 
         sqlx::raw_sql(schema).execute(pool).await?;

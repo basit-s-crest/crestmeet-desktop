@@ -9,6 +9,7 @@ import {
   Mic,
   Square,
   NotebookPen,
+  MessageSquareText,
   Upload,
   LogOut,
   User as UserIcon,
@@ -43,10 +44,8 @@ const Sidebar: React.FC = () => {
 
   useEffect(() => {
     setMounted(true);
-  }, []);
 
-  // Expose openSettings to window for Rust tray to call
-  useEffect(() => {
+    // Global function to open settings from tray
     (window as any).openSettings = () => {
       router.push('/settings');
     };
@@ -58,6 +57,7 @@ const Sidebar: React.FC = () => {
 
   const isHomePage = pathname === '/';
   const isMeetingPage = pathname === '/meetings' || pathname?.includes('/meeting-details');
+  const isChatPage = pathname === '/chat';
   const isSettingsPage = pathname === '/settings';
 
   const renderCollapsedIcons = () => {
@@ -148,6 +148,26 @@ const Sidebar: React.FC = () => {
             </TooltipTrigger>
             <TooltipContent side="right">
               <p>Meeting Notes {meetings.length > 0 ? `(${meetings.length})` : ''}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* AI Assistant */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => router.push('/chat')}
+                className={`p-2.5 rounded-xl transition-all duration-150 relative ${
+                  isChatPage
+                    ? 'bg-indigo-50 text-indigo-600 shadow-xs'
+                    : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
+                }`}
+                aria-label="AI Assistant"
+              >
+                <MessageSquareText className="w-5 h-5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>AI Assistant</p>
             </TooltipContent>
           </Tooltip>
 
@@ -251,6 +271,25 @@ const Sidebar: React.FC = () => {
                     {meetings.length}
                   </span>
                 )}
+              </button>
+
+              {/* AI Assistant */}
+              <button
+                type="button"
+                onClick={() => router.push('/chat')}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  isChatPage
+                    ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <MessageSquareText className={`w-4 h-4 shrink-0 ${isChatPage ? 'text-indigo-600' : 'text-slate-500'}`} />
+                  <span>AI Assistant</span>
+                </div>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-indigo-100 text-indigo-700">
+                  Groq
+                </span>
               </button>
 
               {/* Settings */}
