@@ -92,6 +92,7 @@ export interface MeetingMetadata {
   created_at: string;
   updated_at: string;
   folder_path?: string;
+  project_id?: string;
 }
 
 export interface PaginatedTranscriptsResponse {
@@ -108,3 +109,6 @@ export interface TranscriptSegmentData {
   text: string;
   confidence?: number;
 }
+
+export * from './project';
+

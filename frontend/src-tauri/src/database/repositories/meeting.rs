@@ -28,6 +28,19 @@ impl MeetingsRepository {
         Ok(meetings)
     }
 
+    pub async fn get_meetings_for_project(
+        pool: &PgPool,
+        project_id: Uuid,
+    ) -> Result<Vec<MeetingModel>, sqlx::Error> {
+        let meetings = sqlx::query_as::<_, MeetingModel>(
+            "SELECT * FROM meetings WHERE project_id = $1 ORDER BY created_at DESC",
+        )
+        .bind(project_id)
+        .fetch_all(pool)
+        .await?;
+        Ok(meetings)
+    }
+
     pub async fn get_meetings(pool: &PgPool) -> Result<Vec<MeetingModel>, sqlx::Error> {
         Self::get_meetings_for_user(pool, None).await
     }

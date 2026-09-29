@@ -13,6 +13,9 @@ pub struct MeetingModel {
     #[sqlx(default)]
     #[serde(default)]
     pub user_id: Option<Uuid>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
@@ -149,3 +152,59 @@ pub struct TranscriptSetting {
     #[serde(rename = "openaiApiKey")]
     pub openai_api_key: Option<String>,
 }
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Project {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_personal: bool,
+    pub created_by: Option<Uuid>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectWithRole {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_personal: bool,
+    pub created_by: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub role: String, // "owner", "team_leader", "member"
+    pub member_count: i64,
+    pub meeting_count: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ProjectMember {
+    pub project_id: Uuid,
+    pub user_id: Uuid,
+    pub role: String, // "owner", "team_leader", "member"
+    pub added_by: Option<Uuid>,
+    pub joined_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectMemberWithUser {
+    pub project_id: String,
+    pub user_id: String,
+    pub email: String,
+    pub role: String,
+    pub joined_at: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ProjectInvitation {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub email: String,
+    pub role: String, // "team_leader", "member"
+    pub invited_by: Option<Uuid>,
+    pub status: String, // "pending", "accepted", "revoked"
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub accepted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+

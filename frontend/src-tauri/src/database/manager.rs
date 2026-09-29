@@ -202,6 +202,111 @@ impl DatabaseManager {
             CREATE INDEX IF NOT EXISTS idx_transcripts_user_id ON transcripts(user_id);
             CREATE INDEX IF NOT EXISTS idx_meeting_notes_user_id ON meeting_notes(user_id);
             CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(user_id, chat_session_id, created_at ASC);
+
+            -- =========================================================================
+            -- Projects & Membership Schema (Phase 1)
+            -- =========================================================================
+            CREATE TABLE IF NOT EXISTS projects (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                name TEXT NOT NULL,
+                description TEXT,
+                is_personal BOOLEAN NOT NULL DEFAULT FALSE,
+                created_by UUID,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS project_members (
+                project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                user_id UUID NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('owner', 'team_leader', 'member')),
+                added_by UUID,
+                joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (project_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS project_invitations (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                email TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('team_leader', 'member')),
+                invited_by UUID,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'revoked')),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                accepted_at TIMESTAMPTZ
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_projects_created_by ON projects(created_by);
+            CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
+            CREATE INDEX IF NOT EXISTS idx_project_invitations_email ON project_invitations(LOWER(email));
+
+            -- Denormalized project_id on child tables
+            ALTER TABLE meetings ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE SET NULL;
+            ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
+            ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
+            ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
+
+            CREATE INDEX IF NOT EXISTS idx_meetings_project_id ON meetings(project_id);
+            CREATE INDEX IF NOT EXISTS idx_transcripts_project_id ON transcripts(project_id);
+            CREATE INDEX IF NOT EXISTS idx_summary_processes_project_id ON summary_processes(project_id);
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_project_id ON chat_messages(project_id);
+
+            -- Auto-denormalize project_id from meetings onto transcripts and summary_processes
+            CREATE OR REPLACE FUNCTION set_project_id_from_meeting()
+            RETURNS TRIGGER AS $trg$
+            BEGIN
+                IF NEW.project_id IS NULL AND NEW.meeting_id IS NOT NULL THEN
+                    SELECT project_id INTO NEW.project_id FROM meetings WHERE id = NEW.meeting_id;
+                END IF;
+                RETURN NEW;
+            END;
+            $trg$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trg_transcripts_project_id ON transcripts;
+            CREATE TRIGGER trg_transcripts_project_id
+            BEFORE INSERT ON transcripts
+            FOR EACH ROW EXECUTE FUNCTION set_project_id_from_meeting();
+
+            DROP TRIGGER IF EXISTS trg_summary_processes_project_id ON summary_processes;
+            CREATE TRIGGER trg_summary_processes_project_id
+            BEFORE INSERT ON summary_processes
+            FOR EACH ROW EXECUTE FUNCTION set_project_id_from_meeting();
+
+            -- Idempotent backfill migration for existing users & meetings:
+            -- Create a default "Personal" project for any user who doesn't have one and link their meetings.
+            DO $backfill$
+            DECLARE
+                r RECORD;
+                v_proj_id UUID;
+            BEGIN
+                FOR r IN (
+                    SELECT DISTINCT user_id FROM meetings WHERE user_id IS NOT NULL
+                    UNION
+                    SELECT id AS user_id FROM app_users
+                ) LOOP
+                    SELECT id INTO v_proj_id FROM projects WHERE created_by = r.user_id AND is_personal = true LIMIT 1;
+                    IF v_proj_id IS NULL THEN
+                        INSERT INTO projects (name, is_personal, created_by)
+                        VALUES ('Personal', true, r.user_id)
+                        RETURNING id INTO v_proj_id;
+
+                        INSERT INTO project_members (project_id, user_id, role)
+                        VALUES (v_proj_id, r.user_id, 'owner')
+                        ON CONFLICT (project_id, user_id) DO NOTHING;
+                    END IF;
+
+                    UPDATE meetings SET project_id = v_proj_id
+                    WHERE user_id = r.user_id AND project_id IS NULL;
+
+                    UPDATE transcripts t SET project_id = m.project_id
+                    FROM meetings m
+                    WHERE t.meeting_id = m.id AND t.project_id IS NULL AND m.project_id IS NOT NULL;
+
+                    UPDATE summary_processes s SET project_id = m.project_id
+                    FROM meetings m
+                    WHERE s.meeting_id = m.id AND s.project_id IS NULL AND m.project_id IS NOT NULL;
+                END LOOP;
+            END $backfill$;
         "#;
 
         sqlx::raw_sql(schema).execute(pool).await?;

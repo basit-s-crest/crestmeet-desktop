@@ -6,6 +6,7 @@ use uuid::Uuid;
 pub struct AppState {
     pub db_manager: DatabaseManager,
     pub current_user_id: Arc<RwLock<Option<Uuid>>>,
+    pub active_project_id: Arc<RwLock<Option<Uuid>>>,
 }
 
 impl AppState {
@@ -13,6 +14,7 @@ impl AppState {
         Self {
             db_manager,
             current_user_id: Arc::new(RwLock::new(None)),
+            active_project_id: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -20,6 +22,7 @@ impl AppState {
         Self {
             db_manager,
             current_user_id,
+            active_project_id: Arc::new(RwLock::new(None)),
         }
     }
 }

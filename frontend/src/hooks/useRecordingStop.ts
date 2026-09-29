@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { useTranscripts } from '@/contexts/TranscriptContext';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { useRecordingState, RecordingStatus } from '@/contexts/RecordingStateContext';
+import { useProject } from '@/contexts/ProjectContext';
 import { storageService } from '@/services/storageService';
 import { transcriptService } from '@/services/transcriptService';
 import { useScreenRecording } from '@/hooks/useScreenRecording';
@@ -71,6 +72,7 @@ export function useRecordingStop(
 
   const router = useRouter();
   const { stopScreenCapture } = useScreenRecording();
+  const { activeProject } = useProject();
 
   // Guard to prevent duplicate/concurrent stop calls (e.g., from UI and tray simultaneously)
   const stopInProgressRef = useRef(false);
@@ -285,7 +287,8 @@ export function useRecordingStop(
           const responseData = await storageService.saveMeeting(
             savedMeetingName || meetingTitle || 'New Meeting',  // PREFER savedMeetingName (backend source)
             freshTranscripts,
-            folderPath
+            folderPath,
+            activeProject?.id || null
           );
 
           const meetingId = responseData.meeting_id;

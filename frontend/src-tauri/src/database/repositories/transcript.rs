@@ -19,6 +19,17 @@ impl TranscriptsRepository {
         folder_path: Option<String>,
         user_id: Option<Uuid>,
     ) -> Result<String, SqlxError> {
+        Self::save_transcript_for_project(pool, meeting_title, transcripts, folder_path, user_id, None).await
+    }
+
+    pub async fn save_transcript_for_project(
+        pool: &PgPool,
+        meeting_title: &str,
+        transcripts: &[TranscriptSegment],
+        folder_path: Option<String>,
+        user_id: Option<Uuid>,
+        project_id: Option<Uuid>,
+    ) -> Result<String, SqlxError> {
         let meeting_id = format!("meeting-{}", Uuid::new_v4());
 
         let mut conn = pool.acquire().await?;
@@ -26,31 +37,19 @@ impl TranscriptsRepository {
 
         let now = Utc::now();
 
-        // 1. Create the new meeting
-        let result = if let Some(uid) = user_id {
-            sqlx::query(
-                "INSERT INTO meetings (id, title, created_at, updated_at, folder_path, user_id) VALUES ($1, $2, $3, $4, $5, $6)",
-            )
-            .bind(&meeting_id)
-            .bind(meeting_title)
-            .bind(now)
-            .bind(now)
-            .bind(&folder_path)
-            .bind(uid)
-            .execute(&mut *transaction)
-            .await
-        } else {
-            sqlx::query(
-                "INSERT INTO meetings (id, title, created_at, updated_at, folder_path) VALUES ($1, $2, $3, $4, $5)",
-            )
-            .bind(&meeting_id)
-            .bind(meeting_title)
-            .bind(now)
-            .bind(now)
-            .bind(&folder_path)
-            .execute(&mut *transaction)
-            .await
-        };
+        // 1. Create the new meeting with project_id
+        let result = sqlx::query(
+            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path, user_id, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&meeting_id)
+        .bind(meeting_title)
+        .bind(now)
+        .bind(now)
+        .bind(&folder_path)
+        .bind(user_id)
+        .bind(project_id)
+        .execute(&mut *transaction)
+        .await;
 
         if let Err(e) = result {
             error!("Failed to create meeting '{}': {}", meeting_title, e);
@@ -58,41 +57,26 @@ impl TranscriptsRepository {
             return Err(e);
         }
 
-        info!("Successfully created meeting with id: {}", meeting_id);
+        info!("Successfully created meeting with id: {}, project: {:?}", meeting_id, project_id);
 
-        // 2. Save each transcript segment with audio timing fields
+        // 2. Save each transcript segment with audio timing fields and project_id
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
-            let result = if let Some(uid) = user_id {
-                sqlx::query(
-                    "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, user_id)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
-                )
-                .bind(&transcript_id)
-                .bind(&meeting_id)
-                .bind(&segment.text)
-                .bind(&segment.timestamp)
-                .bind(segment.audio_start_time)
-                .bind(segment.audio_end_time)
-                .bind(segment.duration)
-                .bind(uid)
-                .execute(&mut *transaction)
-                .await
-            } else {
-                sqlx::query(
-                    "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)"
-                )
-                .bind(&transcript_id)
-                .bind(&meeting_id)
-                .bind(&segment.text)
-                .bind(&segment.timestamp)
-                .bind(segment.audio_start_time)
-                .bind(segment.audio_end_time)
-                .bind(segment.duration)
-                .execute(&mut *transaction)
-                .await
-            };
+            let result = sqlx::query(
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, user_id, project_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+            )
+            .bind(&transcript_id)
+            .bind(&meeting_id)
+            .bind(&segment.text)
+            .bind(&segment.timestamp)
+            .bind(segment.audio_start_time)
+            .bind(segment.audio_end_time)
+            .bind(segment.duration)
+            .bind(user_id)
+            .bind(project_id)
+            .execute(&mut *transaction)
+            .await;
 
             if let Err(e) = result {
                 error!(

@@ -39,12 +39,14 @@ export class StorageService {
   async saveMeeting(
     meetingTitle: string,
     transcripts: Transcript[],
-    folderPath: string | null
+    folderPath: string | null,
+    projectId?: string | null
   ): Promise<SaveMeetingResponse> {
     return invoke<SaveMeetingResponse>('api_save_transcript', {
       meetingTitle,
       transcripts,
       folderPath,
+      projectId: projectId || null,
     });
   }
 
@@ -59,10 +61,13 @@ export class StorageService {
 
   /**
    * Get list of all meetings
+   * @param projectId - Optional project ID filter
    * @returns Promise with array of meetings
    */
-  async getMeetings(): Promise<Meeting[]> {
-    return invoke<Meeting[]>('api_get_meetings');
+  async getMeetings(projectId?: string | null): Promise<Meeting[]> {
+    return invoke<Meeting[]>('api_get_meetings', {
+      projectId: projectId || null,
+    });
   }
 }
 

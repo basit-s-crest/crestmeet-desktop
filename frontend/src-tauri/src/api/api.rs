@@ -1,8 +1,10 @@
 use log::{debug as log_debug, error as log_error, info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::str::FromStr;
 use tauri::{AppHandle, Runtime};
 use tauri_plugin_store::StoreExt;
+use uuid::Uuid;
 
 use crate::{
     database::{
@@ -32,6 +34,8 @@ pub struct Meeting {
     pub title: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -325,15 +329,32 @@ pub async fn api_get_meetings<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     auth_token: Option<String>,
+    project_id: Option<String>,
 ) -> Result<Vec<Meeting>, String> {
     log_info!(
-        "api_get_meetings called with auth_token(native) : {}",
-        auth_token.is_some()
+        "api_get_meetings called with auth_token: {}, project_id: {:?}",
+        auth_token.is_some(),
+        project_id
     );
     let pool = state.db_manager.pool();
     let current_user = *state.current_user_id.read().await;
-    let meetings: Result<Vec<MeetingModel>, sqlx::Error> =
-        MeetingsRepository::get_meetings_for_user(pool, current_user).await;
+
+    let meetings: Result<Vec<MeetingModel>, sqlx::Error> = if let Some(ref pid_str) = project_id {
+        if pid_str == "all" {
+            MeetingsRepository::get_meetings_for_user(pool, current_user).await
+        } else if let Ok(pid) = Uuid::from_str(pid_str) {
+            MeetingsRepository::get_meetings_for_project(pool, pid).await
+        } else {
+            MeetingsRepository::get_meetings_for_user(pool, current_user).await
+        }
+    } else {
+        let active = *state.active_project_id.read().await;
+        if let Some(active_pid) = active {
+            MeetingsRepository::get_meetings_for_project(pool, active_pid).await
+        } else {
+            MeetingsRepository::get_meetings_for_user(pool, current_user).await
+        }
+    };
 
     match meetings {
         Ok(meeting_models) => {
@@ -346,6 +367,7 @@ pub async fn api_get_meetings<R: Runtime>(
                     title: m.title,
                     created_at: m.created_at.0.to_rfc3339(),
                     updated_at: m.updated_at.0.to_rfc3339(),
+                    project_id: m.project_id.map(|u| u.to_string()),
                 })
                 .collect();
             Ok(result)
@@ -992,13 +1014,15 @@ pub async fn api_save_transcript<R: Runtime>(
     transcripts: Vec<serde_json::Value>,
     folder_path: Option<String>,
     auth_token: Option<String>,
+    project_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
-        "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}, auth_token: {}",
+        "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}, auth_token: {}, project_id: {:?}",
         meeting_title,
         transcripts.len(),
         folder_path,
-        auth_token.is_some()
+        auth_token.is_some(),
+        project_id
     );
 
     // Log first transcript for debugging
@@ -1031,20 +1055,36 @@ pub async fn api_save_transcript<R: Runtime>(
     let pool = state.db_manager.pool();
     let current_user = *state.current_user_id.read().await;
 
+    // Resolve project_id
+    let mut resolved_project_id: Option<Uuid> = project_id
+        .as_deref()
+        .and_then(|p| Uuid::from_str(p).ok())
+        .or(*state.active_project_id.read().await);
+
+    if resolved_project_id.is_none() {
+        if let Some(uid) = current_user {
+            if let Ok(personal) = crate::database::repositories::project::ProjectsRepository::get_or_create_personal_project(pool, uid).await {
+                resolved_project_id = Some(personal.id);
+            }
+        }
+    }
+
     // Now, call the repository with the correctly typed data.
-    match TranscriptsRepository::save_transcript_for_user(
+    match TranscriptsRepository::save_transcript_for_project(
         pool,
         &meeting_title,
         &transcripts_to_save,
         folder_path,
         current_user,
+        resolved_project_id,
     )
     .await
     {
         Ok(meeting_id) => {
             log_info!(
-                "Successfully saved transcript and created meeting with id: {}",
-                meeting_id
+                "Successfully saved transcript and created meeting with id: {}, project: {:?}",
+                meeting_id,
+                resolved_project_id
             );
             Ok(serde_json::json!({
                 "status": "success",

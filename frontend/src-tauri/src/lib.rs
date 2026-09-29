@@ -47,6 +47,7 @@ pub mod anthropic;
 pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
+pub mod projects;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -639,6 +640,18 @@ pub fn run() {
             api::get_active_user,
             api::api_get_meetings,
             api::api_search_transcripts,
+            // Project & Membership commands
+            projects::commands::api_project_list,
+            projects::commands::api_project_get_active,
+            projects::commands::api_project_set_active,
+            projects::commands::api_project_create,
+            projects::commands::api_project_update,
+            projects::commands::api_project_delete,
+            projects::commands::api_project_get_members,
+            projects::commands::api_project_invite_member,
+            projects::commands::api_project_remove_member,
+            projects::commands::api_project_update_member_role,
+            projects::commands::api_project_revoke_invitation,
             api::api_get_profile,
             api::api_save_profile,
             api::api_update_profile,

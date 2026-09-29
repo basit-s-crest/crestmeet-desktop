@@ -24,6 +24,7 @@ import { useAuth } from '@/contexts/AuthContext';
 
 import Logo from '../Logo';
 import Info from '../Info';
+import { ProjectSwitcher } from '@/components/Project';
 
 const Sidebar: React.FC = () => {
   const router = useRouter();
@@ -67,6 +68,9 @@ const Sidebar: React.FC = () => {
       <TooltipProvider>
         <div className="flex flex-col items-center space-y-3.5 mt-3">
           <Logo isCollapsed={isCollapsed} />
+
+          {/* Project Switcher */}
+          <ProjectSwitcher isCollapsed={true} />
 
           {/* Home */}
           <Tooltip>
@@ -229,6 +233,9 @@ const Sidebar: React.FC = () => {
             <div className="flex-shrink-0 px-4 pt-5 pb-4 border-b border-slate-100">
               <Logo isCollapsed={isCollapsed} />
             </div>
+
+            {/* Project Switcher */}
+            <ProjectSwitcher isCollapsed={false} />
 
             {/* Navigation items */}
             <div className="flex-1 px-3 py-4 space-y-1 overflow-y-auto custom-scrollbar">

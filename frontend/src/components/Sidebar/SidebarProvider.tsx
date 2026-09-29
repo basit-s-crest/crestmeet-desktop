@@ -6,6 +6,7 @@ import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useProject } from '@/contexts/ProjectContext';
 
 
 interface SidebarItem {
@@ -82,6 +83,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   // Use recording state from RecordingStateContext (single source of truth)
   const { isRecording } = useRecordingState();
   const { user } = useAuth();
+  const { activeProject } = useProject();
 
   const pathname = usePathname();
   const router = useRouter();
@@ -94,11 +96,14 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     }
     if (serverAddress) {
       try {
-        const fetchedMeetings = await invoke('api_get_meetings') as Array<{ id: string, title: string, created_at?: string }>;
+        const fetchedMeetings = await invoke('api_get_meetings', {
+          projectId: activeProject?.id || null,
+        }) as Array<{ id: string, title: string, created_at?: string, project_id?: string }>;
         const transformedMeetings = (fetchedMeetings || []).map((meeting: any) => ({
           id: meeting.id,
           title: meeting.title,
           created_at: meeting.created_at,
+          project_id: meeting.project_id,
         }));
         setMeetings(transformedMeetings);
         Analytics.trackBackendConnection(true);
@@ -108,7 +113,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         Analytics.trackBackendConnection(false, error instanceof Error ? error.message : 'Unknown error');
       }
     }
-  }, [serverAddress, user]);
+  }, [serverAddress, user, activeProject?.id]);
 
   useEffect(() => {
     if (!user) {
@@ -116,7 +121,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     } else {
       fetchMeetings();
     }
-  }, [user?.id, serverAddress, fetchMeetings]);
+  }, [user?.id, activeProject?.id, serverAddress, fetchMeetings]);
 
   useEffect(() => {
     const fetchSettings = async () => {

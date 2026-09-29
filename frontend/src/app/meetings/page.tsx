@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useSidebar, CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
 import { useAuth } from '@/contexts/AuthContext';
+import { useProject } from '@/contexts/ProjectContext';
 import {
   formatMeetingDate,
   formatMeetingTime,
@@ -53,6 +54,7 @@ export default function MeetingsPage() {
   const router = useRouter();
   const { meetings, setMeetings, setCurrentMeeting } = useSidebar();
   const { user } = useAuth();
+  const { activeProject } = useProject();
 
   // Search & Filters state
   const [searchQuery, setSearchQuery] = useState('');
@@ -296,11 +298,14 @@ export default function MeetingsPage() {
       <div className="max-w-6xl mx-auto w-full mb-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
                 Meeting Notes
               </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200/60">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200/60 shadow-2xs">
+                {activeProject?.name || 'Personal Project'}
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200/60">
                 {meetings.length} {meetings.length === 1 ? 'call' : 'calls'}
               </span>
             </div>
