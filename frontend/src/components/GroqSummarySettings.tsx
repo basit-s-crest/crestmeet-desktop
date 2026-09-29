@@ -247,7 +247,7 @@ export function GroqSummarySettings({
             onClick={handleOpenGroqConsole}
             className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 hover:underline"
           >
-            <span>Get free Groq API key</span>
+            <span>Get API Key</span>
             <ExternalLink className="w-3 h-3" />
           </button>
         </div>
@@ -295,7 +295,7 @@ export function GroqSummarySettings({
           </div>
         </div>
         <p className="text-xs text-gray-500">
-          Once saved, your key is stored in Supabase. You will never be asked again.
+          Your API key is saved locally on this computer only.
         </p>
       </div>
 

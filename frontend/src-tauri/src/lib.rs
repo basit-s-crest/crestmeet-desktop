@@ -38,6 +38,7 @@ pub mod console_utils;
 pub mod database;
 pub mod deepgram;
 pub mod google_calendar;
+pub mod local_credentials;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;

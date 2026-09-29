@@ -339,6 +339,8 @@ impl SummaryService {
         let api_key = if provider == LLMProvider::Ollama || provider == LLMProvider::BuiltInAI || provider == LLMProvider::CustomOpenAI {
             // These providers don't require API keys from the standard database column
             String::new()
+        } else if let Some(local_key) = crate::local_credentials::get_local_api_key(&_app, effective_user_id, &model_provider).filter(|k| !k.trim().is_empty()) {
+            local_key
         } else {
             match SettingsRepository::get_api_key_for_user(&pool, effective_user_id, &model_provider).await {
                 Ok(Some(key)) if !key.is_empty() => key,

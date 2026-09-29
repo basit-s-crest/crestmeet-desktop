@@ -558,10 +558,10 @@ pub async fn api_save_model_config<R: Runtime>(
     // Skip API key saving for custom-openai provider (it uses customOpenAIConfig JSON instead)
     if let Some(key) = api_key {
         if !key.is_empty() && provider != "custom-openai" {
-            log_info!("🔑 API key provided, saving...");
+            log_info!("🔑 API key provided, saving locally to device...");
+            let _ = crate::local_credentials::save_local_api_key(&_app, current_user, &provider, &key);
             if let Err(e) = SettingsRepository::save_api_key_for_user(pool, current_user, &provider, &key).await {
-                log_error!("❌ Failed to save API key: {}", e);
-                return Err(e.to_string());
+                log_warn!("Notice: DB key backup write: {}", e);
             }
         }
     }
@@ -591,10 +591,20 @@ pub async fn api_get_api_key<R: Runtime>(
         &provider
     );
     let current_user = *state.current_user_id.read().await;
+
+    // 1. Check local device credentials store first
+    if let Some(local_key) = crate::local_credentials::get_local_api_key(&_app, current_user, &provider) {
+        if !local_key.trim().is_empty() {
+            log_info!("Successfully retrieved API key from local device store for '{}'", &provider);
+            return Ok(local_key);
+        }
+    }
+
+    // 2. Fall back to user's isolated row in database
     match SettingsRepository::get_api_key_for_user(&state.db_manager.pool(), current_user, &provider).await {
         Ok(key) => {
             log_info!(
-                "Successfully retrieved API key for provider '{}'.",
+                "Retrieved API key from user DB row for provider '{}'.",
                 &provider
             );
             Ok(key.unwrap_or_default())
@@ -620,16 +630,15 @@ pub async fn api_save_api_key<R: Runtime>(
     );
     let pool = state.db_manager.pool();
     let current_user = *state.current_user_id.read().await;
-    match SettingsRepository::save_api_key_for_user(pool, current_user, &provider, &api_key).await {
-        Ok(_) => {
-            log_info!("Successfully saved API key for provider '{}'", &provider);
-            Ok(serde_json::json!({ "status": "success", "message": "API key saved successfully" }))
-        }
-        Err(e) => {
-            log_error!("Failed to save API key for provider '{}': {}", &provider, e);
-            Err(e.to_string())
-        }
-    }
+
+    // 1. Save to local device store (private to this machine and user)
+    let _ = crate::local_credentials::save_local_api_key(&_app, current_user, &provider, &api_key);
+
+    // 2. Also save to user's isolated DB row for sync
+    let _ = SettingsRepository::save_api_key_for_user(pool, current_user, &provider, &api_key).await;
+
+    log_info!("Successfully saved API key locally for provider '{}'", &provider);
+    Ok(serde_json::json!({ "status": "success", "message": "API key saved successfully" }))
 }
 
 #[tauri::command]
@@ -649,31 +658,30 @@ pub async fn api_get_transcript_config<R: Runtime>(
                 &config.provider,
                 &config.model
             );
-            match SettingsRepository::get_transcript_api_key_for_user(pool, current_user, &config.provider).await {
-                Ok(api_key) => {
-                    log_info!("Successfully retrieved transcript config and API key.");
-                    Ok(Some(TranscriptConfig {
-                        provider: config.provider,
-                        model: config.model,
-                        api_key,
-                    }))
-                }
-                Err(e) => {
-                    log_error!(
-                        "Failed to get transcript API key for provider {}: {}",
-                        &config.provider,
-                        e
-                    );
-                    Err(e.to_string())
+
+            // 1. Check local device credentials store first
+            let mut resolved_api_key = crate::local_credentials::get_local_api_key(&_app, current_user, &config.provider);
+
+            // 2. Fall back to user's isolated DB setting if not found locally
+            if resolved_api_key.is_none() {
+                if let Ok(db_key) = SettingsRepository::get_transcript_api_key_for_user(pool, current_user, &config.provider).await {
+                    resolved_api_key = db_key;
                 }
             }
+
+            Ok(Some(TranscriptConfig {
+                provider: config.provider,
+                model: config.model,
+                api_key: resolved_api_key,
+            }))
         }
         Ok(None) => {
-            log_info!("No transcript config found, returning default deepgram cloud config.");
+            log_info!("No transcript config found, returning default deepgram cloud config with local key.");
+            let local_key = crate::local_credentials::get_local_api_key(&_app, current_user, "deepgram");
             Ok(Some(TranscriptConfig {
                 provider: "deepgram".to_string(),
                 model: "nova-2".to_string(),
-                api_key: None,
+                api_key: local_key,
             }))
         }
         Err(e) => {
@@ -704,14 +712,13 @@ pub async fn api_save_transcript_config<R: Runtime>(
         return Err(e.to_string());
     }
 
-    if let Some(key) = api_key {
+    if let Some(ref key) = api_key {
+        // Save to local device credentials store
+        let _ = crate::local_credentials::save_local_api_key(&_app, current_user, &provider, key);
+
         if !key.is_empty() {
-            log_info!("API key provided, saving for transcript provider...");
-            if let Err(e) = SettingsRepository::save_transcript_api_key_for_user(pool, current_user, &provider, &key).await
-            {
-                log_error!("Failed to save transcript API key: {}", e);
-                return Err(e.to_string());
-            }
+            log_info!("API key provided, saving to DB row...");
+            let _ = SettingsRepository::save_transcript_api_key_for_user(pool, current_user, &provider, key).await;
         }
     }
 
@@ -734,6 +741,15 @@ pub async fn api_get_transcript_api_key<R: Runtime>(
     );
     let pool = state.db_manager.pool();
     let current_user = *state.current_user_id.read().await;
+
+    // 1. Check local device credentials store first
+    if let Some(local_key) = crate::local_credentials::get_local_api_key(&_app, current_user, &provider) {
+        if !local_key.trim().is_empty() {
+            return Ok(local_key);
+        }
+    }
+
+    // 2. Fall back to user's isolated DB row
     match SettingsRepository::get_transcript_api_key_for_user(pool, current_user, &provider).await {
         Ok(key) => {
             log_info!(
@@ -764,6 +780,8 @@ pub async fn api_delete_api_key<R: Runtime>(
         "log_api_delete_api_key called (native) for provider '{}'",
         &provider
     );
+    let current_user = *state.current_user_id.read().await;
+    let _ = crate::local_credentials::delete_local_api_key(&_app, current_user, &provider);
     match SettingsRepository::delete_api_key(&state.db_manager.pool(), &provider).await {
         Ok(_) => {
             log_info!("Successfully deleted API key for provider '{}'.", &provider);

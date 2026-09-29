@@ -95,6 +95,15 @@ export function TranscriptSettings({
         }
     };
 
+    const handleOpenDeepgramConsole = async () => {
+        try {
+            await invoke('open_external_url', { url: 'https://console.deepgram.com' });
+        } catch (e) {
+            console.error('Failed to open Deepgram console:', e);
+            window.open('https://console.deepgram.com', '_blank');
+        }
+    };
+
     const handleSaveConfig = async () => {
         setIsSaving(true);
         try {
@@ -112,7 +121,7 @@ export function TranscriptSettings({
             });
 
             setIsApiKeyLocked(true);
-            toast.success('Transcription settings saved successfully!');
+            toast.success('Transcription settings saved locally!');
             if (onModelSelect) {
                 onModelSelect();
             }
@@ -188,10 +197,21 @@ export function TranscriptSettings({
                 </div>
 
                 {/* API Key Input */}
-                <div className="space-y-1.5 pt-2">
-                    <Label className="block text-sm font-medium text-gray-700">
-                        Deepgram API Key
-                    </Label>
+                <div className="space-y-2 pt-2">
+                    <div className="flex items-center justify-between">
+                        <Label className="text-sm font-semibold text-gray-800">
+                            Deepgram API Key
+                        </Label>
+                        <button
+                            type="button"
+                            onClick={handleOpenDeepgramConsole}
+                            className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 hover:underline"
+                        >
+                            <span>Get API Key</span>
+                            <ExternalLink className="w-3 h-3" />
+                        </button>
+                    </div>
+
                     <div className="relative">
                         <Input
                             type={showApiKey ? 'text' : 'password'}
@@ -202,7 +222,7 @@ export function TranscriptSettings({
                             onChange={(e) => setApiKey(e.target.value)}
                             disabled={isApiKeyLocked}
                             onClick={handleInputClick}
-                            placeholder="Enter your Deepgram API key (starts with token...)"
+                            placeholder="Enter your Deepgram API key (token...)"
                         />
                         {isApiKeyLocked && (
                             <div
@@ -232,17 +252,9 @@ export function TranscriptSettings({
                             </Button>
                         </div>
                     </div>
-                    <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
-                        <span>Free accounts include $200 in free transcription credits.</span>
-                        <a
-                            href="https://console.deepgram.com"
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-blue-600 hover:underline font-medium"
-                        >
-                            Get API Key <ExternalLink className="w-3 h-3" />
-                        </a>
-                    </div>
+                    <p className="text-xs text-gray-500">
+                        Free accounts include $200 in free transcription credits. Saved locally on this computer only.
+                    </p>
                 </div>
 
                 {/* Save Button */}

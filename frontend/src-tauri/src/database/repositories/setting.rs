@@ -208,12 +208,8 @@ impl SettingsRepository {
             }
         }
 
-        // Fallback: look for any configured row with a non-empty API key for this provider
-        let fallback_query = format!(
-            "SELECT \"{}\" FROM settings WHERE \"{}\" IS NOT NULL AND \"{}\" != '' LIMIT 1",
-            api_key_column, api_key_column, api_key_column
-        );
-        sqlx::query_scalar(&fallback_query).fetch_optional(pool).await
+        // Keys are strictly isolated per user - never fall back to another user's row
+        Ok(None)
     }
 
     pub async fn get_api_key(
@@ -369,11 +365,7 @@ impl SettingsRepository {
             );
             sqlx::query_scalar(&query).bind(uid).fetch_optional(pool).await
         } else {
-            let query = format!(
-                "SELECT \"{}\" FROM transcript_settings LIMIT 1",
-                api_key_column
-            );
-            sqlx::query_scalar(&query).fetch_optional(pool).await
+            Ok(None)
         }
     }
 
