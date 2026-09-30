@@ -16,6 +16,9 @@ pub struct MeetingModel {
     #[sqlx(default)]
     #[serde(default)]
     pub project_id: Option<Uuid>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub has_video: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
@@ -210,5 +213,36 @@ pub struct ProjectInvitation {
     pub status: String, // "pending", "accepted", "revoked"
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub accepted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MediaRequest {
+    pub id: Uuid,
+    pub meeting_id: String,
+    pub project_id: Option<Uuid>,
+    pub requested_by: Uuid,
+    pub recorder_id: Uuid,
+    pub media_type: String,
+    pub status: String, // "pending", "transferring", "completed", "declined", "failed"
+    pub progress: i32,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaRequestWithDetails {
+    pub id: String,
+    pub meeting_id: String,
+    pub meeting_title: String,
+    pub project_id: Option<String>,
+    pub requested_by: String,
+    pub requester_email: Option<String>,
+    pub recorder_id: String,
+    pub recorder_email: Option<String>,
+    pub media_type: String,
+    pub status: String,
+    pub progress: i32,
+    pub created_at: String,
+    pub updated_at: String,
 }
 

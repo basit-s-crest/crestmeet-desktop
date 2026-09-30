@@ -18,6 +18,10 @@ interface MeetingDetailsResponse {
   updated_at: string;
   transcripts: Transcript[];
   folder_path?: string;
+  has_video?: boolean;
+  user_id?: string;
+  recorder_email?: string;
+  project_id?: string;
 }
 
 function MeetingDetailsContent() {
@@ -144,6 +148,10 @@ function MeetingDetailsContent() {
         updated_at: metadata.updated_at,
         transcripts: transcripts, // Paginated transcripts from hook
         folder_path: metadata.folder_path, // For retranscription feature
+        has_video: metadata.has_video,
+        user_id: metadata.user_id,
+        recorder_email: metadata.recorder_email,
+        project_id: metadata.project_id,
       });
 
       // Sync with sidebar context

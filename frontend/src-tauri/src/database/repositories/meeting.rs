@@ -92,7 +92,7 @@ impl MeetingsRepository {
 
         // Get meeting details
         let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = $1")
+            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path, user_id, project_id, has_video FROM meetings WHERE id = $1")
                 .bind(meeting_id)
                 .fetch_optional(&mut *transaction)
                 .await?;
@@ -109,6 +109,16 @@ impl MeetingsRepository {
                     .bind(meeting_id)
                     .fetch_all(&mut *transaction)
                     .await?;
+
+            let recorder_email: Option<String> = if let Some(uid) = meeting.user_id {
+                sqlx::query_scalar("SELECT email FROM app_users WHERE id = $1")
+                    .bind(uid)
+                    .fetch_optional(&mut *transaction)
+                    .await
+                    .unwrap_or(None)
+            } else {
+                None
+            };
 
             transaction.commit().await?;
 
@@ -131,6 +141,10 @@ impl MeetingsRepository {
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
                 transcripts: meeting_transcripts,
+                has_video: meeting.has_video,
+                user_id: meeting.user_id.map(|u| u.to_string()),
+                project_id: meeting.project_id.map(|p| p.to_string()),
+                recorder_email,
             }))
         } else {
             transaction.rollback().await?;
@@ -150,7 +164,7 @@ impl MeetingsRepository {
         }
 
         let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = $1")
+            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path, user_id, project_id, has_video FROM meetings WHERE id = $1")
                 .bind(meeting_id)
                 .fetch_optional(pool)
                 .await?;

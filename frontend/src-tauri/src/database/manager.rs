@@ -243,9 +243,30 @@ impl DatabaseManager {
 
             -- Denormalized project_id on child tables
             ALTER TABLE meetings ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE SET NULL;
+            ALTER TABLE meetings ADD COLUMN IF NOT EXISTS has_video BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
             ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
             ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
+
+            -- =========================================================================
+            -- Media Requests Schema (P2P On-Demand Media Sharing)
+            -- =========================================================================
+            CREATE TABLE IF NOT EXISTS media_requests (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+                requested_by UUID NOT NULL,
+                recorder_id UUID NOT NULL,
+                media_type TEXT NOT NULL DEFAULT 'video',
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'transferring', 'completed', 'declined', 'failed')),
+                progress INT NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_requests_recorder ON media_requests(recorder_id, status);
+            CREATE INDEX IF NOT EXISTS idx_media_requests_meeting ON media_requests(meeting_id);
+            CREATE INDEX IF NOT EXISTS idx_media_requests_requested_by ON media_requests(requested_by, status);
 
             CREATE INDEX IF NOT EXISTS idx_meetings_project_id ON meetings(project_id);
             CREATE INDEX IF NOT EXISTS idx_transcripts_project_id ON transcripts(project_id);

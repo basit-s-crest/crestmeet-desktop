@@ -93,6 +93,33 @@ export interface MeetingMetadata {
   updated_at: string;
   folder_path?: string;
   project_id?: string;
+  has_video?: boolean;
+  user_id?: string;
+  recorder_email?: string;
+}
+
+export interface MediaRequest {
+  id: string;
+  meeting_id: string;
+  meeting_title?: string;
+  project_id?: string;
+  requested_by: string;
+  requester_email?: string;
+  recorder_id: string;
+  recorder_email?: string;
+  media_type: 'video' | 'audio';
+  status: 'pending' | 'transferring' | 'completed' | 'declined' | 'failed';
+  progress: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VideoFileInfo {
+  file_path: string;
+  file_name: string;
+  file_size: number;
+  chunk_size: number;
+  total_chunks: number;
 }
 
 export interface PaginatedTranscriptsResponse {

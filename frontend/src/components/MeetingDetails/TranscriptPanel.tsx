@@ -30,6 +30,12 @@ interface TranscriptPanelProps {
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
 
+  // P2P video props
+  hasVideo?: boolean;
+  recorderId?: string;
+  recorderEmail?: string;
+  projectId?: string;
+
   // Resizable width in pixels
   width?: number;
 }
@@ -52,6 +58,10 @@ export function TranscriptPanel({
   meetingId,
   meetingFolderPath,
   onRefetchTranscripts,
+  hasVideo,
+  recorderId,
+  recorderEmail,
+  projectId,
   width,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
@@ -89,7 +99,14 @@ export function TranscriptPanel({
       </div>
 
       {/* Meeting Screen Recording Video Player (if video was captured) */}
-      <MeetingVideoPlayer folderPath={meetingFolderPath} />
+      <MeetingVideoPlayer
+        meetingId={meetingId}
+        folderPath={meetingFolderPath}
+        hasVideo={hasVideo}
+        recorderId={recorderId}
+        recorderEmail={recorderEmail}
+        projectId={projectId}
+      />
 
       {/* Transcript content - use virtualized view for better performance */}
       <div className="flex-1 overflow-hidden pb-4">

@@ -129,6 +129,11 @@ pub struct MeetingDetails {
     pub created_at: String,
     pub updated_at: String,
     pub transcripts: Vec<MeetingTranscript>,
+    #[serde(default)]
+    pub has_video: bool,
+    pub user_id: Option<String>,
+    pub project_id: Option<String>,
+    pub recorder_email: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -154,6 +159,11 @@ pub struct MeetingMetadata {
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
+    #[serde(default)]
+    pub has_video: bool,
+    pub user_id: Option<String>,
+    pub project_id: Option<String>,
+    pub recorder_email: Option<String>,
 }
 
 /// Paginated transcripts response with total count
@@ -835,6 +845,61 @@ pub async fn api_delete_meeting<R: Runtime>(
 
     let pool = state.db_manager.pool();
 
+    // Verify meeting exists and permissions
+    let meeting_opt = MeetingsRepository::get_meeting_metadata(pool, &meeting_id)
+        .await
+        .map_err(|e| format!("Database error while checking meeting: {}", e))?;
+
+    let meeting = match meeting_opt {
+        Some(m) => m,
+        None => return Err(format!("Meeting not found: {}", meeting_id)),
+    };
+
+    let current_user_id = *state.current_user_id.read().await;
+
+    let mut allowed = false;
+
+    // 1. Check if meeting has no user_id (legacy meeting)
+    if meeting.user_id.is_none() {
+        allowed = true;
+    }
+
+    // 2. Check if current user is the creator of the meeting
+    if let (Some(curr), Some(creator)) = (current_user_id, meeting.user_id) {
+        if curr == creator {
+            allowed = true;
+        }
+    }
+
+    // 3. Check if current user is the project owner
+    if !allowed {
+        if let (Some(curr), Some(pid)) = (current_user_id, meeting.project_id) {
+            let role: Option<String> = sqlx::query_scalar(
+                "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2"
+            )
+            .bind(pid)
+            .bind(curr)
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            if let Some(r) = role {
+                if r == "owner" {
+                    allowed = true;
+                }
+            }
+        }
+    }
+
+    if !allowed {
+        log_warn!(
+            "Delete meeting denied for user {:?} on meeting {}",
+            current_user_id,
+            meeting_id
+        );
+        return Err("Permission denied: Only the meeting recorder or project owner can delete this meeting.".to_string());
+    }
+
     match MeetingsRepository::delete_meeting(pool, &meeting_id).await {
         Ok(true) => {
             log_info!("Successfully deleted meeting {}", meeting_id);
@@ -902,12 +967,25 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
     match MeetingsRepository::get_meeting_metadata(pool, &meeting_id).await {
         Ok(Some(meeting)) => {
             log_info!("Successfully retrieved meeting metadata {}", meeting_id);
+            let recorder_email: Option<String> = if let Some(uid) = meeting.user_id {
+                sqlx::query_scalar("SELECT email FROM app_users WHERE id = $1")
+                    .bind(uid)
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap_or(None)
+            } else {
+                None
+            };
             Ok(MeetingMetadata {
                 id: meeting.id,
                 title: meeting.title,
                 created_at: meeting.created_at.0.to_rfc3339(),
                 updated_at: meeting.updated_at.0.to_rfc3339(),
                 folder_path: meeting.folder_path,
+                has_video: meeting.has_video,
+                user_id: meeting.user_id.map(|u| u.to_string()),
+                project_id: meeting.project_id.map(|p| p.to_string()),
+                recorder_email,
             })
         }
         Ok(None) => {
@@ -1015,14 +1093,16 @@ pub async fn api_save_transcript<R: Runtime>(
     folder_path: Option<String>,
     auth_token: Option<String>,
     project_id: Option<String>,
+    has_video: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
-        "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}, auth_token: {}, project_id: {:?}",
+        "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}, auth_token: {}, project_id: {:?}, has_video: {:?}",
         meeting_title,
         transcripts.len(),
         folder_path,
         auth_token.is_some(),
-        project_id
+        project_id,
+        has_video
     );
 
     // Log first transcript for debugging
@@ -1077,6 +1157,7 @@ pub async fn api_save_transcript<R: Runtime>(
         folder_path,
         current_user,
         resolved_project_id,
+        has_video.unwrap_or(false),
     )
     .await
     {

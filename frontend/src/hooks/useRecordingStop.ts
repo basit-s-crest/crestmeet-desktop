@@ -261,6 +261,7 @@ export function useRecordingStop(
         });
 
         try {
+          let hasVideo = false;
           // If video was recorded, save it to the meeting folder
           try {
             const videoBlob = await videoBlobPromise;
@@ -270,6 +271,7 @@ export function useRecordingStop(
               const videoData = Array.from(new Uint8Array(buffer));
               await invoke('api_save_meeting_video', { folderPath, videoData });
               console.log('✅ Recorded meeting video saved successfully');
+              hasVideo = true;
 
               // Automatically merge audio + video with FFmpeg in the background
               try {
@@ -288,7 +290,8 @@ export function useRecordingStop(
             savedMeetingName || meetingTitle || 'New Meeting',  // PREFER savedMeetingName (backend source)
             freshTranscripts,
             folderPath,
-            activeProject?.id || null
+            activeProject?.id || null,
+            hasVideo
           );
 
           const meetingId = responseData.meeting_id;

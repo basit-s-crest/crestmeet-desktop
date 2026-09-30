@@ -1,5 +1,11 @@
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tracing::{error as log_error, info as log_info, warn as log_warn};
+use uuid::Uuid;
+use crate::database::models::MediaRequestWithDetails;
+use crate::database::repositories::media_request::MediaRequestsRepository;
+use crate::state::AppState;
+use tauri::State;
 
 /// Saves raw video bytes to a meeting's folder on disk.
 #[tauri::command]
@@ -209,3 +215,268 @@ pub async fn api_load_meeting_video_bytes(file_path: String) -> Result<Vec<u8>, 
         }
     }
 }
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct VideoFileInfo {
+    pub file_path: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub chunk_size: u32,
+    pub total_chunks: u32,
+}
+
+#[tauri::command]
+pub async fn api_set_meeting_has_video(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    has_video: bool,
+) -> Result<bool, String> {
+    let pool = state.db_manager.pool();
+    sqlx::query("UPDATE meetings SET has_video = $1 WHERE id = $2")
+        .bind(has_video)
+        .bind(&meeting_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update meeting has_video flag: {}", e))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn api_update_meeting_folder_path(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    folder_path: String,
+) -> Result<bool, String> {
+    let pool = state.db_manager.pool();
+    sqlx::query("UPDATE meetings SET folder_path = $1, has_video = true WHERE id = $2")
+        .bind(&folder_path)
+        .bind(&meeting_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update meeting folder_path: {}", e))?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn api_create_media_request(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    project_id: Option<String>,
+    recorder_id: String,
+    media_type: Option<String>,
+) -> Result<MediaRequestWithDetails, String> {
+    let current = *state.current_user_id.read().await;
+    let requested_by = current.ok_or_else(|| "User not authenticated".to_string())?;
+
+    let parsed_recorder_id = Uuid::from_str(&recorder_id)
+        .map_err(|_| "Invalid recorder_id UUID".to_string())?;
+    let parsed_project_id = project_id
+        .as_deref()
+        .and_then(|p| Uuid::from_str(p).ok());
+
+    let pool = state.db_manager.pool();
+    MediaRequestsRepository::create_or_get_pending_request(
+        pool,
+        &meeting_id,
+        parsed_project_id,
+        requested_by,
+        parsed_recorder_id,
+        media_type.as_deref().unwrap_or("video"),
+    )
+    .await
+    .map_err(|e| format!("Failed to create media request: {}", e))
+}
+
+#[tauri::command]
+pub async fn api_get_incoming_media_requests(
+    state: State<'_, AppState>,
+) -> Result<Vec<MediaRequestWithDetails>, String> {
+    let current = *state.current_user_id.read().await;
+    let recorder_id = match current {
+        Some(uid) => uid,
+        None => return Ok(Vec::new()),
+    };
+
+    let pool = state.db_manager.pool();
+    MediaRequestsRepository::get_incoming_pending_requests(pool, recorder_id)
+        .await
+        .map_err(|e| format!("Failed to get incoming media requests: {}", e))
+}
+
+#[tauri::command]
+pub async fn api_get_meeting_media_request(
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<Option<MediaRequestWithDetails>, String> {
+    let current = *state.current_user_id.read().await;
+    let requested_by = match current {
+        Some(uid) => uid,
+        None => return Ok(None),
+    };
+
+    let pool = state.db_manager.pool();
+    MediaRequestsRepository::get_request_for_meeting(pool, &meeting_id, requested_by)
+        .await
+        .map_err(|e| format!("Failed to get media request for meeting: {}", e))
+}
+
+#[tauri::command]
+pub async fn api_update_media_request_status(
+    state: State<'_, AppState>,
+    request_id: String,
+    status: String,
+    progress: Option<i32>,
+) -> Result<bool, String> {
+    let parsed_id = Uuid::from_str(&request_id)
+        .map_err(|_| "Invalid request_id UUID".to_string())?;
+    let pool = state.db_manager.pool();
+
+    MediaRequestsRepository::update_status(
+        pool,
+        parsed_id,
+        &status,
+        progress.unwrap_or(0),
+    )
+    .await
+    .map_err(|e| format!("Failed to update media request status: {}", e))
+}
+
+/// Retrieves metadata and chunk layout for a meeting video file.
+#[tauri::command]
+pub async fn api_get_meeting_video_info(
+    folder_path: String,
+    chunk_size: Option<u32>,
+) -> Result<Option<VideoFileInfo>, String> {
+    let video_path_opt = api_check_meeting_video(folder_path).await?;
+    let video_path_str = match video_path_opt {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let path = Path::new(&video_path_str);
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| format!("Failed to read video metadata: {}", e))?;
+
+    let file_size = metadata.len();
+    let effective_chunk_size = chunk_size.unwrap_or(64 * 1024); // default 64KB
+    let total_chunks = ((file_size + effective_chunk_size as u64 - 1) / effective_chunk_size as u64) as u32;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("meeting_video.mp4")
+        .to_string();
+
+    Ok(Some(VideoFileInfo {
+        file_path: video_path_str,
+        file_name,
+        file_size,
+        chunk_size: effective_chunk_size,
+        total_chunks,
+    }))
+}
+
+/// Reads a specific slice (chunk) of a video file from disk.
+#[tauri::command]
+pub async fn api_read_video_chunk(
+    file_path: String,
+    chunk_index: u32,
+    chunk_size: u32,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+
+    let mut file = tokio::fs::File::open(&file_path)
+        .await
+        .map_err(|e| format!("Failed to open video file {}: {}", file_path, e))?;
+
+    let offset = chunk_index as u64 * chunk_size as u64;
+    file.seek(SeekFrom::Start(offset))
+        .await
+        .map_err(|e| format!("Failed to seek to offset {}: {}", offset, e))?;
+
+    let mut buffer = vec![0u8; chunk_size as usize];
+    let bytes_read = file
+        .read(&mut buffer)
+        .await
+        .map_err(|e| format!("Failed to read chunk {}: {}", chunk_index, e))?;
+
+    buffer.truncate(bytes_read);
+    Ok(buffer)
+}
+
+/// Prepares the local folder for receiving a transferred meeting video.
+#[tauri::command]
+pub async fn api_prepare_p2p_receive_folder(
+    meeting_id: String,
+) -> Result<String, String> {
+    let base_folder = crate::audio::recording_preferences::get_default_recordings_folder();
+    let meeting_folder = base_folder.join(&meeting_id);
+
+    tokio::fs::create_dir_all(&meeting_folder)
+        .await
+        .map_err(|e| format!("Failed to create local receive folder: {}", e))?;
+
+    Ok(meeting_folder.to_string_lossy().to_string())
+}
+
+/// Writes a received chunk into the recipient's local meeting video file.
+#[tauri::command]
+pub async fn api_write_p2p_chunk(
+    state: State<'_, AppState>,
+    meeting_id: String,
+    file_name: String,
+    chunk_index: u32,
+    chunk_size: u32,
+    chunk_data: Vec<u8>,
+    is_final: bool,
+) -> Result<bool, String> {
+    use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
+
+    let base_folder = crate::audio::recording_preferences::get_default_recordings_folder();
+    let meeting_folder = base_folder.join(&meeting_id);
+
+    tokio::fs::create_dir_all(&meeting_folder)
+        .await
+        .map_err(|e| format!("Failed to create local receive folder: {}", e))?;
+
+    let target_file_path = meeting_folder.join(&file_name);
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&target_file_path)
+        .await
+        .map_err(|e| format!("Failed to open file for writing {:?}: {}", target_file_path, e))?;
+
+    let offset = chunk_index as u64 * chunk_size as u64;
+    file.seek(SeekFrom::Start(offset))
+        .await
+        .map_err(|e| format!("Failed to seek offset {}: {}", offset, e))?;
+
+    file.write_all(&chunk_data)
+        .await
+        .map_err(|e| format!("Failed to write chunk {}: {}", chunk_index, e))?;
+
+    file.flush()
+        .await
+        .map_err(|e| format!("Failed to flush chunk {}: {}", chunk_index, e))?;
+
+    if is_final {
+        let folder_str = meeting_folder.to_string_lossy().to_string();
+        log_info!(
+            "🎉 Completed P2P video transfer for meeting {} into {}",
+            meeting_id,
+            folder_str
+        );
+
+        let pool = state.db_manager.pool();
+        let _ = sqlx::query("UPDATE meetings SET folder_path = $1, has_video = true WHERE id = $2")
+            .bind(&folder_str)
+            .bind(&meeting_id)
+            .execute(pool)
+            .await;
+    }
+
+    Ok(true)
+}
+

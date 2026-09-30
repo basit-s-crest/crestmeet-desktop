@@ -316,6 +316,10 @@ export default function PageContent({
           meetingId={meeting.id}
           meetingFolderPath={meeting.folder_path}
           onRefetchTranscripts={onRefetchTranscripts}
+          hasVideo={meeting.has_video}
+          recorderId={meeting.user_id}
+          recorderEmail={meeting.recorder_email}
+          projectId={meeting.project_id || activeProject?.id}
           width={transcriptWidth}
         />
 

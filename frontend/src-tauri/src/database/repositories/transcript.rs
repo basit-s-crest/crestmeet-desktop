@@ -19,7 +19,7 @@ impl TranscriptsRepository {
         folder_path: Option<String>,
         user_id: Option<Uuid>,
     ) -> Result<String, SqlxError> {
-        Self::save_transcript_for_project(pool, meeting_title, transcripts, folder_path, user_id, None).await
+        Self::save_transcript_for_project(pool, meeting_title, transcripts, folder_path, user_id, None, false).await
     }
 
     pub async fn save_transcript_for_project(
@@ -29,6 +29,7 @@ impl TranscriptsRepository {
         folder_path: Option<String>,
         user_id: Option<Uuid>,
         project_id: Option<Uuid>,
+        has_video: bool,
     ) -> Result<String, SqlxError> {
         let meeting_id = format!("meeting-{}", Uuid::new_v4());
 
@@ -39,7 +40,7 @@ impl TranscriptsRepository {
 
         // 1. Create the new meeting with project_id
         let result = sqlx::query(
-            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path, user_id, project_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO meetings (id, title, created_at, updated_at, folder_path, user_id, project_id, has_video) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(&meeting_id)
         .bind(meeting_title)
@@ -48,6 +49,7 @@ impl TranscriptsRepository {
         .bind(&folder_path)
         .bind(user_id)
         .bind(project_id)
+        .bind(has_video)
         .execute(&mut *transaction)
         .await;
 
