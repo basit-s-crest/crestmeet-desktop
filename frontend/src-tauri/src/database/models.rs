@@ -159,6 +159,8 @@ pub struct Project {
     pub name: String,
     pub description: Option<String>,
     pub is_personal: bool,
+    #[sqlx(default)]
+    pub is_archived: bool,
     pub created_by: Option<Uuid>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -170,6 +172,8 @@ pub struct ProjectWithRole {
     pub name: String,
     pub description: Option<String>,
     pub is_personal: bool,
+    #[serde(default)]
+    pub is_archived: bool,
     pub created_by: Option<String>,
     pub created_at: String,
     pub updated_at: String,

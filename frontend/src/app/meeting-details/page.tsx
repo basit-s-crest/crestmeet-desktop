@@ -6,8 +6,9 @@ import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
 import Analytics from "@/lib/analytics";
 import { invoke } from "@tauri-apps/api/core";
-import { LoaderIcon } from "lucide-react";
+import { LoaderIcon, ArrowLeft } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
+import { useProject } from "@/contexts/ProjectContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
 
 interface MeetingDetailsResponse {
@@ -25,7 +26,16 @@ function MeetingDetailsContent() {
   const source = searchParams.get('source'); // Check if navigated from recording
   const { setCurrentMeeting, refetchMeetings, stopSummaryPolling } = useSidebar();
   const { isAutoSummary } = useConfig(); // Get auto-summary toggle state
+  const { activeProject } = useProject();
   const router = useRouter();
+
+  const handleBackToProjects = () => {
+    if (activeProject) {
+      router.push(`/meetings?project=${activeProject.id}`);
+    } else {
+      router.push('/meetings');
+    }
+  };
   const [meetingDetails, setMeetingDetails] = useState<MeetingDetailsResponse | null>(null);
   const [meetingSummary, setMeetingSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -337,15 +347,27 @@ function MeetingDetailsContent() {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <p className="text-red-500 mb-4">{error}</p>
+      <div className="flex flex-col h-screen bg-gray-50">
+        <div className="h-12 bg-white border-b border-gray-200 px-4 flex items-center shrink-0 z-20">
           <button
-            onClick={() => router.push('/')}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+            onClick={handleBackToProjects}
+            className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-gray-100 cursor-pointer border border-gray-200 shadow-2xs"
+            title="Return to Projects page"
           >
-            Go Back
+            <ArrowLeft className="w-4 h-4 text-gray-600" />
+            <span>Back to Projects</span>
           </button>
+        </div>
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="text-center">
+            <p className="text-red-500 mb-4">{error}</p>
+            <button
+              onClick={handleBackToProjects}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
+            >
+              Back to Projects
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -353,9 +375,23 @@ function MeetingDetailsContent() {
 
   // Show loading spinner while initial data loads
   if ((isLoading || isLoadingTranscripts) || !meetingDetails) {
-    return <div className="flex items-center justify-center h-screen">
-      <LoaderIcon className="animate-spin size-6 " />
-    </div>;
+    return (
+      <div className="flex flex-col h-screen bg-gray-50">
+        <div className="h-12 bg-white border-b border-gray-200 px-4 flex items-center shrink-0 z-20">
+          <button
+            onClick={handleBackToProjects}
+            className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-gray-100 cursor-pointer border border-gray-200 shadow-2xs"
+            title="Return to Projects page"
+          >
+            <ArrowLeft className="w-4 h-4 text-gray-600" />
+            <span>Back to Projects</span>
+          </button>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <LoaderIcon className="animate-spin size-6 text-gray-400" />
+        </div>
+      </div>
+    );
   }
 
   return <PageContent

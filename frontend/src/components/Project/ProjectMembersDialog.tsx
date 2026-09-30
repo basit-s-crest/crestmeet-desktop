@@ -23,19 +23,22 @@ import {
 } from 'lucide-react';
 import { useProject } from '@/contexts/ProjectContext';
 import { projectService } from '@/services/projectService';
-import { ProjectMemberWithUser, ProjectInvitation, ProjectRole } from '@/types/project';
+import { ProjectMemberWithUser, ProjectInvitation, ProjectRole, ProjectWithRole } from '@/types/project';
 import { toast } from 'sonner';
 
 interface ProjectMembersDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  project?: ProjectWithRole | null;
 }
 
 export const ProjectMembersDialog: React.FC<ProjectMembersDialogProps> = ({
   isOpen,
   onClose,
+  project,
 }) => {
   const { activeProject, refreshProjects } = useProject();
+  const currentProject = project || activeProject;
   const [members, setMembers] = useState<ProjectMemberWithUser[]>([]);
   const [invitations, setInvitations] = useState<ProjectInvitation[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -46,10 +49,10 @@ export const ProjectMembersDialog: React.FC<ProjectMembersDialogProps> = ({
   const [isInviting, setIsInviting] = useState(false);
 
   const fetchMembers = useCallback(async () => {
-    if (!activeProject) return;
+    if (!currentProject) return;
     try {
       setIsLoading(true);
-      const res = await projectService.getMembers(activeProject.id);
+      const res = await projectService.getMembers(currentProject.id);
       setMembers(res.members);
       setInvitations(res.pending_invitations);
     } catch (err: any) {
@@ -57,7 +60,7 @@ export const ProjectMembersDialog: React.FC<ProjectMembersDialogProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [activeProject]);
+  }, [currentProject]);
 
   useEffect(() => {
     if (isOpen) {
@@ -65,17 +68,17 @@ export const ProjectMembersDialog: React.FC<ProjectMembersDialogProps> = ({
     }
   }, [isOpen, fetchMembers]);
 
-  const canManage = activeProject?.role === 'owner' || activeProject?.role === 'team_leader';
-  const isOwner = activeProject?.role === 'owner';
+  const canManage = currentProject?.role === 'owner' || currentProject?.role === 'team_leader';
+  const isOwner = currentProject?.role === 'owner';
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeProject || !inviteEmail.trim()) return;
+    if (!currentProject || !inviteEmail.trim()) return;
 
     try {
       setIsInviting(true);
       const msg = await projectService.inviteMember(
-        activeProject.id,
+        currentProject.id,
         inviteEmail.trim(),
         inviteRole
       );
@@ -92,12 +95,12 @@ export const ProjectMembersDialog: React.FC<ProjectMembersDialogProps> = ({
   };
 
   const handleRemoveMember = async (targetUserId: string, email: string) => {
-    if (!activeProject) return;
+    if (!currentProject) return;
     const confirm = window.confirm(`Remove ${email} from this project?`);
     if (!confirm) return;
 
     try {
-      await projectService.removeMember(activeProject.id, targetUserId);
+      await projectService.removeMember(currentProject.id, targetUserId);
       toast.success(`Removed ${email}`);
       await fetchMembers();
       await refreshProjects();
@@ -107,9 +110,9 @@ export const ProjectMembersDialog: React.FC<ProjectMembersDialogProps> = ({
   };
 
   const handleRoleChange = async (targetUserId: string, newRole: string) => {
-    if (!activeProject) return;
+    if (!currentProject) return;
     try {
-      await projectService.updateMemberRole(activeProject.id, targetUserId, newRole);
+      await projectService.updateMemberRole(currentProject.id, targetUserId, newRole);
       toast.success('Member role updated');
       await fetchMembers();
     } catch (err: any) {
@@ -118,9 +121,9 @@ export const ProjectMembersDialog: React.FC<ProjectMembersDialogProps> = ({
   };
 
   const handleRevokeInvitation = async (invitationId: string) => {
-    if (!activeProject) return;
+    if (!currentProject) return;
     try {
-      await projectService.revokeInvitation(activeProject.id, invitationId);
+      await projectService.revokeInvitation(currentProject.id, invitationId);
       toast.success('Invitation revoked');
       await fetchMembers();
     } catch (err: any) {
@@ -165,14 +168,14 @@ export const ProjectMembersDialog: React.FC<ProjectMembersDialogProps> = ({
               </div>
               <div>
                 <DialogTitle className="text-base font-semibold text-slate-900">
-                  {activeProject?.name || 'Project'} Members
+                  {currentProject?.name || 'Project'} Members
                 </DialogTitle>
                 <p className="text-xs text-slate-500">
                   Manage access and collaborate with team members
                 </p>
               </div>
             </div>
-            {activeProject && renderRoleBadge(activeProject.role)}
+            {currentProject && renderRoleBadge(currentProject.role)}
           </div>
         </DialogHeader>
 

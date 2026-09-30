@@ -16,6 +16,7 @@ interface ProjectContextType {
   createProject: (name: string, description?: string) => Promise<ProjectWithRole>;
   updateProject: (projectId: string, name: string, description?: string) => Promise<ProjectWithRole>;
   deleteProject: (projectId: string) => Promise<boolean>;
+  archiveProject: (projectId: string, archive?: boolean) => Promise<boolean>;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
@@ -42,9 +43,8 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         const found = res.projects.find(p => p.id === res.active_project_id);
         setActiveProject(found || res.projects[0] || null);
       } else if (res.projects.length > 0) {
-        // Default to personal or first project
-        const personal = res.projects.find(p => p.is_personal) || res.projects[0];
-        setActiveProject(personal);
+        const fallback = res.projects.find(p => !p.is_archived) || res.projects[0] || null;
+        setActiveProject(fallback);
       } else {
         setActiveProject(null);
       }
@@ -121,6 +121,19 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const archiveProject = async (projectId: string, archive: boolean = true): Promise<boolean> => {
+    try {
+      await projectService.archiveProject(projectId, archive);
+      await refreshProjects();
+      toast.success(archive ? 'Project archived' : 'Project restored');
+      return true;
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : 'Failed to archive project';
+      toast.error(msg);
+      return false;
+    }
+  };
+
   return (
     <ProjectContext.Provider
       value={{
@@ -132,6 +145,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         createProject,
         updateProject,
         deleteProject,
+        archiveProject,
       }}
     >
       {children}

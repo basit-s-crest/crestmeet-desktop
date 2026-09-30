@@ -239,6 +239,7 @@ impl DatabaseManager {
             CREATE INDEX IF NOT EXISTS idx_projects_created_by ON projects(created_by);
             CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id);
             CREATE INDEX IF NOT EXISTS idx_project_invitations_email ON project_invitations(LOWER(email));
+            ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE;
 
             -- Denormalized project_id on child tables
             ALTER TABLE meetings ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE SET NULL;

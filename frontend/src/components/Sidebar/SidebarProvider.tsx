@@ -21,6 +21,7 @@ export interface CurrentMeeting {
   id: string;
   title: string;
   created_at?: string;
+  project_id?: string;
 }
 
 // Search result type for transcript search

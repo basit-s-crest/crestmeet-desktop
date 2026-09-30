@@ -1,8 +1,12 @@
 "use client";
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft } from 'lucide-react';
 import { Summary, SummaryResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
+import { useProject } from '@/contexts/ProjectContext';
+import { cleanMeetingTitle, formatMeetingDate, formatMeetingTime } from '@/lib/dateUtils';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
@@ -52,6 +56,18 @@ export default function PageContent({
     summaryDataKeys: summaryData ? Object.keys(summaryData) : null,
     transcriptsCount: meeting.transcripts?.length
   });
+
+  // Routing & Project Context
+  const router = useRouter();
+  const { activeProject } = useProject();
+
+  const handleBackToProjects = () => {
+    if (activeProject) {
+      router.push(`/meetings?project=${activeProject.id}`);
+    } else {
+      router.push('/meetings');
+    }
+  };
 
   // State
   const [customPrompt, setCustomPrompt] = useState<string>('');
@@ -216,6 +232,69 @@ export default function PageContent({
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="flex flex-col h-screen bg-gray-50"
     >
+      {/* Top Header Bar — Back feature in up-left corner & Editable Meeting Name */}
+      <div className="min-h-[52px] bg-white border-b border-gray-200 px-4 py-2 flex items-center justify-between shrink-0 z-20 gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <button
+            onClick={handleBackToProjects}
+            className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-gray-100 cursor-pointer border border-gray-200 shadow-2xs shrink-0"
+            title="Return to Projects page"
+          >
+            <ArrowLeft className="w-4 h-4 text-gray-600" />
+            <span>Back to Projects</span>
+          </button>
+
+          <div className="h-4 w-[1px] bg-gray-200 hidden sm:block shrink-0" />
+
+          {activeProject && (
+            <span className="text-xs font-semibold text-gray-600 bg-gray-100 px-2.5 py-1 rounded-md border border-gray-200/80 truncate hidden md:inline shrink-0">
+              {activeProject.name}
+            </span>
+          )}
+
+          {/* Editable Meeting Title directly in the top header */}
+          {meetingData.isEditingTitle ? (
+            <input
+              type="text"
+              value={meetingData.meetingTitle}
+              onChange={(e) => meetingData.handleTitleChange(e.target.value)}
+              onBlur={async () => {
+                meetingData.setIsEditingTitle(false);
+                if (meetingData.isTitleDirty) {
+                  await meetingData.handleSaveMeetingTitle();
+                }
+              }}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter') {
+                  meetingData.setIsEditingTitle(false);
+                  if (meetingData.isTitleDirty) {
+                    await meetingData.handleSaveMeetingTitle();
+                  }
+                } else if (e.key === 'Escape') {
+                  meetingData.setIsEditingTitle(false);
+                }
+              }}
+              autoFocus
+              className="text-base sm:text-lg font-bold text-gray-900 bg-gray-50 border border-blue-400 rounded-lg px-2.5 py-0.5 focus:outline-none focus:ring-2 focus:ring-blue-500/20 w-full max-w-sm sm:max-w-md md:max-w-xl"
+            />
+          ) : (
+            <h1
+              onClick={() => meetingData.setIsEditingTitle(true)}
+              className="text-base sm:text-lg font-bold text-gray-900 hover:text-blue-600 hover:bg-gray-100/80 px-2 py-0.5 rounded-lg cursor-pointer transition-colors truncate max-w-sm sm:max-w-md md:max-w-xl select-none"
+              title="Click to edit meeting title"
+            >
+              {cleanMeetingTitle(meetingData.meetingTitle || meeting.title, meeting.created_at)}
+            </h1>
+          )}
+        </div>
+
+        {meeting.created_at && (
+          <div className="text-xs text-gray-500 shrink-0 hidden md:block">
+            {formatMeetingDate(meeting.created_at)} · {formatMeetingTime(meeting.created_at)}
+          </div>
+        )}
+      </div>
+
       <div className={`flex flex-1 overflow-hidden ${isDragging ? 'select-none cursor-col-resize' : ''}`}>
         <TranscriptPanel
           transcripts={meetingData.transcripts}

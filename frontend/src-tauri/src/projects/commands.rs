@@ -45,11 +45,7 @@ pub async fn api_project_list(
     // Check or initialize active_project_id
     let mut active_lock = state.active_project_id.write().await;
     if active_lock.is_none() {
-        if let Some(personal) = projects.iter().find(|p| p.is_personal) {
-            if let Ok(pid) = Uuid::from_str(&personal.id) {
-                *active_lock = Some(pid);
-            }
-        } else if let Some(first) = projects.first() {
+        if let Some(first) = projects.iter().find(|p| !p.is_archived) {
             if let Ok(pid) = Uuid::from_str(&first.id) {
                 *active_lock = Some(pid);
             }
@@ -86,8 +82,8 @@ pub async fn api_project_get_active(
         }
     }
 
-    // Default to Personal project if found
-    Ok(projects.into_iter().find(|p| p.is_personal))
+    // Default to first active project if found
+    Ok(projects.into_iter().find(|p| !p.is_archived))
 }
 
 /// Set active project ID
@@ -289,3 +285,18 @@ pub async fn api_project_revoke_invitation(
         .await
         .map(|_| true)
 }
+
+/// Archive or unarchive a project
+#[tauri::command]
+pub async fn api_project_archive(
+    state: State<'_, AppState>,
+    project_id: String,
+    archive: bool,
+) -> Result<bool, String> {
+    let user_id = get_authenticated_user(&state).await?;
+    let pid = Uuid::from_str(&project_id).map_err(|_| "Invalid project ID".to_string())?;
+    let pool = state.db_manager.pool();
+
+    ProjectsRepository::archive_project(pool, user_id, pid, archive).await
+}
+

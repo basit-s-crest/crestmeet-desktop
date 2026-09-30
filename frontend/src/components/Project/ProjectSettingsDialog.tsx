@@ -17,36 +17,40 @@ import { toast } from 'sonner';
 interface ProjectSettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  project?: any | null;
 }
 
 export const ProjectSettingsDialog: React.FC<ProjectSettingsDialogProps> = ({
   isOpen,
   onClose,
+  project,
 }) => {
-  const { activeProject, updateProject, deleteProject } = useProject();
+  const { activeProject, updateProject, deleteProject, archiveProject } = useProject();
+  const currentProject = project || activeProject;
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
-    if (activeProject) {
-      setName(activeProject.name);
-      setDescription(activeProject.description || '');
+    if (currentProject) {
+      setName(currentProject.name);
+      setDescription(currentProject.description || '');
     }
-  }, [activeProject, isOpen]);
+  }, [currentProject, isOpen]);
 
-  const canEdit = activeProject?.role === 'owner' || activeProject?.role === 'team_leader';
-  const isOwner = activeProject?.role === 'owner';
-  const isPersonal = activeProject?.is_personal ?? false;
+  const canEdit = currentProject?.role === 'owner' || currentProject?.role === 'team_leader';
+  const isOwner = currentProject?.role === 'owner';
+  const isArchived = currentProject?.is_archived ?? false;
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeProject || !name.trim()) return;
+    if (!currentProject || !name.trim()) return;
 
     try {
       setIsSaving(true);
-      await updateProject(activeProject.id, name.trim(), description.trim() || undefined);
+      await updateProject(currentProject.id, name.trim(), description.trim() || undefined);
       onClose();
     } catch (err) {
       // toast shown by context
@@ -55,16 +59,35 @@ export const ProjectSettingsDialog: React.FC<ProjectSettingsDialogProps> = ({
     }
   };
 
-  const handleDelete = async () => {
-    if (!activeProject || isPersonal) return;
+  const handleToggleArchive = async () => {
+    if (!currentProject) return;
+    const actionText = isArchived ? 'restore' : 'archive';
     const confirm = window.confirm(
-      `Are you sure you want to permanently delete "${activeProject.name}"? All associated meetings and transcripts will be removed.`
+      `Are you sure you want to ${actionText} "${currentProject.name}"?`
+    );
+    if (!confirm) return;
+
+    try {
+      setIsArchiving(true);
+      const success = await archiveProject(currentProject.id, !isArchived);
+      if (success) {
+        onClose();
+      }
+    } finally {
+      setIsArchiving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!currentProject) return;
+    const confirm = window.confirm(
+      `Are you sure you want to permanently delete "${currentProject.name}"? All associated meetings and transcripts will be removed.`
     );
     if (!confirm) return;
 
     try {
       setIsDeleting(true);
-      const success = await deleteProject(activeProject.id);
+      const success = await deleteProject(currentProject.id);
       if (success) {
         onClose();
       }
@@ -84,7 +107,7 @@ export const ProjectSettingsDialog: React.FC<ProjectSettingsDialogProps> = ({
             Project Settings
           </DialogTitle>
           <p className="text-xs text-slate-500">
-            Configure settings and preferences for {activeProject?.name}.
+            Configure settings and preferences for {currentProject?.name}.
           </p>
         </DialogHeader>
 
@@ -132,34 +155,70 @@ export const ProjectSettingsDialog: React.FC<ProjectSettingsDialogProps> = ({
           )}
         </form>
 
-        {/* Danger Zone: Delete Project */}
-        {isOwner && !isPersonal && (
-          <div className="mt-4 pt-4 border-t border-slate-100">
-            <div className="flex items-center justify-between p-3 rounded-xl bg-red-50/60 border border-red-100">
+        {/* Project Actions Zone */}
+        {canEdit && (
+          <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+            {/* Archive / Restore */}
+            <div className="flex items-center justify-between p-3 rounded-xl bg-amber-50/60 border border-amber-100">
               <div className="flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                 <div>
-                  <p className="text-xs font-semibold text-red-900">Delete Project</p>
-                  <p className="text-[11px] text-red-600">
-                    Permanently delete this project and all its data.
+                  <p className="text-xs font-semibold text-amber-900">
+                    {isArchived ? 'Restore Project' : 'Archive Project'}
+                  </p>
+                  <p className="text-[11px] text-amber-700">
+                    {isArchived
+                      ? 'Move this project back to active projects.'
+                      : 'Move this project to the archived projects tab.'}
                   </p>
                 </div>
               </div>
               <Button
                 type="button"
-                variant="destructive"
+                variant="outline"
                 size="sm"
-                onClick={handleDelete}
-                disabled={isDeleting}
-                className="h-8 px-3 rounded-lg text-xs bg-red-600 hover:bg-red-700 shrink-0 font-medium"
+                onClick={handleToggleArchive}
+                disabled={isArchiving}
+                className="h-8 px-3 rounded-lg text-xs border-amber-200 hover:bg-amber-100 text-amber-800 shrink-0 font-medium"
               >
-                {isDeleting ? (
+                {isArchiving ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : isArchived ? (
+                  'Restore'
                 ) : (
-                  <Trash2 className="w-3.5 h-3.5" />
+                  'Archive'
                 )}
               </Button>
             </div>
+
+            {/* Delete Project (Activated only after project went to archive section) */}
+            {isArchived && isOwner && (
+              <div className="flex items-center justify-between p-3 rounded-xl bg-red-50/60 border border-red-100">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                  <div>
+                    <p className="text-xs font-semibold text-red-900">Delete Project</p>
+                    <p className="text-[11px] text-red-600">
+                      Permanently delete this archived project and all its meetings.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="h-8 px-3 rounded-lg text-xs bg-red-600 hover:bg-red-700 shrink-0 font-medium"
+                >
+                  {isDeleting ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5" />
+                  )}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </DialogContent>

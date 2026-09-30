@@ -7,6 +7,7 @@ export interface ProjectWithRole {
   name: string;
   description: string | null;
   is_personal: boolean;
+  is_archived: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;

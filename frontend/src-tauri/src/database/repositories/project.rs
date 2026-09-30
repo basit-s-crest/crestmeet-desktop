@@ -18,7 +18,7 @@ impl ProjectsRepository {
     ) -> Result<Project, SqlxError> {
         let existing = sqlx::query_as::<_, Project>(
             r#"
-            SELECT id, name, description, is_personal, created_by, created_at, updated_at
+            SELECT id, name, description, is_personal, COALESCE(is_archived, false) as is_archived, created_by, created_at, updated_at
             FROM projects
             WHERE created_by = $1 AND is_personal = true
             LIMIT 1
@@ -51,7 +51,7 @@ impl ProjectsRepository {
             r#"
             INSERT INTO projects (name, is_personal, created_by)
             VALUES ('Personal', true, $1)
-            RETURNING id, name, description, is_personal, created_by, created_at, updated_at
+            RETURNING id, name, description, is_personal, COALESCE(is_archived, false) as is_archived, created_by, created_at, updated_at
             "#,
         )
         .bind(user_id)
@@ -75,21 +75,19 @@ impl ProjectsRepository {
         Ok(project)
     }
 
-    /// List all projects where user is a member, ordered by personal first, then updated_at DESC
+    /// List all projects where user is a member, ordered by updated_at DESC
     pub async fn get_user_projects(
         pool: &PgPool,
         user_id: Uuid,
     ) -> Result<Vec<ProjectWithRole>, SqlxError> {
-        // First ensure Personal project exists
-        let _ = Self::get_or_create_personal_project(pool, user_id).await;
-
-        let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, bool, Option<Uuid>, chrono::DateTime<Utc>, chrono::DateTime<Utc>, String, i64, i64)>(
+        let rows = sqlx::query_as::<_, (Uuid, String, Option<String>, bool, bool, Option<Uuid>, chrono::DateTime<Utc>, chrono::DateTime<Utc>, String, i64, i64)>(
             r#"
             SELECT 
                 p.id,
                 p.name,
                 p.description,
                 p.is_personal,
+                COALESCE(p.is_archived, false) as is_archived,
                 p.created_by,
                 p.created_at,
                 p.updated_at,
@@ -99,7 +97,7 @@ impl ProjectsRepository {
             FROM projects p
             JOIN project_members pm ON p.id = pm.project_id
             WHERE pm.user_id = $1
-            ORDER BY p.is_personal DESC, p.updated_at DESC
+            ORDER BY p.updated_at DESC
             "#
         )
         .bind(user_id)
@@ -108,12 +106,13 @@ impl ProjectsRepository {
 
         let result = rows
             .into_iter()
-            .map(|(id, name, description, is_personal, created_by, created_at, updated_at, role, member_count, meeting_count)| {
+            .map(|(id, name, description, is_personal, is_archived, created_by, created_at, updated_at, role, member_count, meeting_count)| {
                 ProjectWithRole {
                     id: id.to_string(),
                     name,
                     description,
                     is_personal,
+                    is_archived,
                     created_by: created_by.map(|u| u.to_string()),
                     created_at: created_at.to_rfc3339(),
                     updated_at: updated_at.to_rfc3339(),
@@ -162,7 +161,7 @@ impl ProjectsRepository {
             r#"
             INSERT INTO projects (name, description, is_personal, created_by)
             VALUES ($1, $2, false, $3)
-            RETURNING id, name, description, is_personal, created_by, created_at, updated_at
+            RETURNING id, name, description, is_personal, COALESCE(is_archived, false) as is_archived, created_by, created_at, updated_at
             "#,
         )
         .bind(clean_name)
@@ -199,6 +198,7 @@ impl ProjectsRepository {
             name: project.name,
             description: project.description,
             is_personal: project.is_personal,
+            is_archived: false,
             created_by: project.created_by.map(|u| u.to_string()),
             created_at: project.created_at.to_rfc3339(),
             updated_at: project.updated_at.to_rfc3339(),
@@ -235,7 +235,7 @@ impl ProjectsRepository {
             UPDATE projects
             SET name = $1, description = $2, updated_at = NOW()
             WHERE id = $3
-            RETURNING id, name, description, is_personal, created_by, created_at, updated_at
+            RETURNING id, name, description, is_personal, COALESCE(is_archived, false) as is_archived, created_by, created_at, updated_at
             "#,
         )
         .bind(clean_name)
@@ -262,6 +262,7 @@ impl ProjectsRepository {
             name: updated.name,
             description: updated.description,
             is_personal: updated.is_personal,
+            is_archived: updated.is_archived,
             created_by: updated.created_by.map(|u| u.to_string()),
             created_at: updated.created_at.to_rfc3339(),
             updated_at: updated.updated_at.to_rfc3339(),
@@ -271,7 +272,34 @@ impl ProjectsRepository {
         })
     }
 
-    /// Delete project (owner only; cannot delete is_personal project)
+    /// Archive or unarchive a project (owner or team_leader only; cannot archive is_personal project)
+    pub async fn archive_project(
+        pool: &PgPool,
+        user_id: Uuid,
+        project_id: Uuid,
+        archive: bool,
+    ) -> Result<bool, String> {
+        let role = Self::get_user_role(pool, project_id, user_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "You are not a member of this project".to_string())?;
+
+        if role != "owner" && role != "team_leader" {
+            return Err("Only the project owner or team leader can archive this project".to_string());
+        }
+
+        sqlx::query("UPDATE projects SET is_archived = $1, updated_at = NOW() WHERE id = $2")
+            .bind(archive)
+            .bind(project_id)
+            .execute(pool)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        info!("Set is_archived = {} for project {} by user {}", archive, project_id, user_id);
+        Ok(true)
+    }
+
+    /// Delete project (owner only)
     pub async fn delete_project(
         pool: &PgPool,
         user_id: Uuid,
@@ -284,19 +312,6 @@ impl ProjectsRepository {
 
         if role != "owner" {
             return Err("Only the project owner can delete this project".to_string());
-        }
-
-        let is_personal = sqlx::query_scalar::<_, bool>(
-            "SELECT is_personal FROM projects WHERE id = $1",
-        )
-        .bind(project_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| e.to_string())?
-        .unwrap_or(false);
-
-        if is_personal {
-            return Err("Default personal project cannot be deleted".to_string());
         }
 
         sqlx::query("DELETE FROM projects WHERE id = $1")

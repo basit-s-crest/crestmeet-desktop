@@ -43,6 +43,10 @@ export class ProjectService {
     return invoke<boolean>('api_project_delete', { projectId });
   }
 
+  async archiveProject(projectId: string, archive: boolean = true): Promise<boolean> {
+    return invoke<boolean>('api_project_archive', { projectId, archive });
+  }
+
   async getMembers(projectId: string): Promise<ProjectMembersResponse> {
     return invoke<ProjectMembersResponse>('api_project_get_members', { projectId });
   }

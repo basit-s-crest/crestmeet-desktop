@@ -646,6 +646,7 @@ pub fn run() {
             projects::commands::api_project_set_active,
             projects::commands::api_project_create,
             projects::commands::api_project_update,
+            projects::commands::api_project_archive,
             projects::commands::api_project_delete,
             projects::commands::api_project_get_members,
             projects::commands::api_project_invite_member,

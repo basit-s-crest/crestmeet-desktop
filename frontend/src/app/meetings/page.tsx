@@ -1,30 +1,48 @@
 'use client';
 
-import React, { useState, useMemo, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useMemo, useEffect, useRef, useLayoutEffect, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Calendar as CalendarIcon,
+  Calendar,
   Clock,
   Search,
   Plus,
   Trash2,
   Pencil,
-  FileText,
   ArrowRight,
-  Filter,
-  X,
-  CalendarRange,
   ArrowUpDown,
+  ChevronDown,
+  X,
+  Folder,
+  FolderPlus,
+  FolderKanban,
+  Users,
+  Settings as SettingsIcon,
+  ShieldCheck,
+  Star,
+  User,
+  NotebookPen,
+  ArrowLeft,
+  Mic,
+  Archive,
   RotateCcw,
+  FileText,
 } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { useSidebar, CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
 import { useAuth } from '@/contexts/AuthContext';
 import { useProject } from '@/contexts/ProjectContext';
+import { ProjectWithRole, ProjectRole } from '@/types/project';
+import {
+  CreateProjectDialog,
+  ProjectMembersDialog,
+  ProjectSettingsDialog,
+} from '@/components/Project';
 import {
   formatMeetingDate,
   formatMeetingTime,
   getRelativeTime,
-  cleanMeetingTitle
+  cleanMeetingTitle,
 } from '@/lib/dateUtils';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
@@ -35,39 +53,76 @@ import {
   DialogFooter,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { VisuallyHidden } from '@/components/ui/visually-hidden';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-type DatePreset = 'all' | 'today' | 'yesterday' | 'last7' | 'thisMonth' | 'custom';
-type SortOrder = 'newest' | 'oldest' | 'titleAsc' | 'titleDesc';
+type SortOrder = 'newest' | 'oldest';
+type DateFilter = 'all' | 'today' | 'week' | 'month' | 'custom';
 
-// Helper to convert Date to YYYY-MM-DD string in local time
-function getLocalDateString(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+interface DateFilterOption {
+  id: DateFilter;
+  label: string;
+  icon?: React.ComponentType<{ className?: string }>;
 }
+
+const DATE_FILTER_OPTIONS: DateFilterOption[] = [
+  { id: 'all', label: 'All time' },
+  { id: 'today', label: 'Today' },
+  { id: 'week', label: 'This week' },
+  { id: 'month', label: 'This month' },
+  { id: 'custom', label: 'Custom', icon: Calendar },
+];
+
+// Main overview tabs (constant)
+const OVERVIEW_TABS = [
+  { id: 'active', label: 'Active Projects', icon: FolderKanban },
+  { id: 'archived', label: 'Archived', icon: Archive },
+] as const;
 
 export default function MeetingsPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { meetings, setMeetings, setCurrentMeeting } = useSidebar();
   const { user } = useAuth();
-  const { activeProject } = useProject();
+  const { projects, activeProject, switchProject, archiveProject, deleteProject } = useProject();
 
-  // Search & Filters state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activePreset, setActivePreset] = useState<DatePreset>('all');
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  // Selected project for drill-down view (null = viewing projects overview)
+  const [selectedProject, setSelectedProject] = useState<ProjectWithRole | null>(null);
+
+  // Overview tab: 'active' | 'archived'
+  const [overviewTab, setOverviewTab] = useState<'active' | 'archived'>('active');
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [underlineStyle, setUnderlineStyle] = useState({ left: 0, width: 0 });
+
+  // Search & Filter state for inside-project meetings
+  const [meetingSearch, setMeetingSearch] = useState('');
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [customDateStart, setCustomDateStart] = useState('');
+  const [customDateEnd, setCustomDateEnd] = useState('');
+
+  // Search state for projects overview grid
+  const [projectSearch, setProjectSearch] = useState('');
+
+  // Search state for archived projects overview grid
+  const [archivedSearch, setArchivedSearch] = useState('');
 
   // Modals state
-  const [deleteModalState, setDeleteModalState] = useState<{ isOpen: boolean; meetingId: string | null }>({
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [membersModalProject, setMembersModalProject] = useState<ProjectWithRole | null>(null);
+  const [settingsModalProject, setSettingsModalProject] = useState<ProjectWithRole | null>(null);
+  const [projectToArchive, setProjectToArchive] = useState<ProjectWithRole | null>(null);
+  const [projectToDelete, setProjectToDelete] = useState<ProjectWithRole | null>(null);
+
+  const [deleteModalState, setDeleteModalState] = useState<{
+    isOpen: boolean;
+    meetingId: string | null;
+  }>({
     isOpen: false,
-    meetingId: null
+    meetingId: null,
   });
+
   const [editModalState, setEditModalState] = useState<{
     isOpen: boolean;
     meetingId: string | null;
@@ -75,171 +130,179 @@ export default function MeetingsPage() {
   }>({
     isOpen: false,
     meetingId: null,
-    currentTitle: ''
+    currentTitle: '',
   });
   const [editingTitle, setEditingTitle] = useState('');
 
-  // Date boundary calculations for presets
-  const todayStr = useMemo(() => getLocalDateString(new Date()), []);
-  const yesterdayStr = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return getLocalDateString(d);
-  }, []);
-  const sevenDaysAgoStr = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return getLocalDateString(d);
-  }, []);
-  const firstDayOfMonthStr = useMemo(() => {
-    const d = new Date();
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    return `${year}-${month}-01`;
-  }, []);
+  // Handle URL query parameter for project deep link if present
+  useEffect(() => {
+    const projectIdParam = searchParams.get('project');
+    if (projectIdParam && projects.length > 0) {
+      const found = projects.find((p) => p.id === projectIdParam);
+      if (found) {
+        setSelectedProject(found);
+        switchProject(found.id);
+      }
+    }
+  }, [searchParams, projects, switchProject]);
 
-  // Handle Preset Selection
-  const handleSelectPreset = (preset: DatePreset) => {
-    setActivePreset(preset);
-    switch (preset) {
-      case 'all':
-        setStartDate('');
-        setEndDate('');
-        break;
-      case 'today':
-        setStartDate(todayStr);
-        setEndDate(todayStr);
-        break;
-      case 'yesterday':
-        setStartDate(yesterdayStr);
-        setEndDate(yesterdayStr);
-        break;
-      case 'last7':
-        setStartDate(sevenDaysAgoStr);
-        setEndDate(todayStr);
-        break;
-      case 'thisMonth':
-        setStartDate(firstDayOfMonthStr);
-        setEndDate(todayStr);
-        break;
-      default:
-        break;
+  // Keep selectedProject in sync when projects change (e.g. archived, restored, or updated)
+  useEffect(() => {
+    if (selectedProject) {
+      const found = projects.find((p) => p.id === selectedProject.id);
+      if (found) {
+        setSelectedProject(found);
+      } else {
+        setSelectedProject(null);
+      }
+    }
+  }, [projects]);
+
+  // Update animated tab underline position for overview tabs
+  useLayoutEffect(() => {
+    if (selectedProject) return;
+    const activeIndex = OVERVIEW_TABS.findIndex((tab) => tab.id === overviewTab);
+    const activeTabElement = tabRefs.current[activeIndex];
+
+    if (activeTabElement) {
+      const { offsetLeft, offsetWidth } = activeTabElement;
+      setUnderlineStyle({ left: offsetLeft, width: offsetWidth });
+    }
+  }, [overviewTab, selectedProject]);
+
+  // Open a specific project's meetings view
+  const handleOpenProject = async (project: ProjectWithRole) => {
+    setSelectedProject(project);
+    setMeetingSearch('');
+    await switchProject(project.id);
+  };
+
+  // Return to all projects overview
+  const handleBackToProjects = () => {
+    setSelectedProject(null);
+    setMeetingSearch('');
+  };
+
+  // Start recording directly for the currently selected project
+  const handleRecordForCurrentProject = async () => {
+    if (selectedProject && !selectedProject.is_archived) {
+      await switchProject(selectedProject.id);
+      sessionStorage.setItem('autoStartRecording', 'true');
+      router.push('/');
     }
   };
 
-  // Handle manual date input changes
-  const handleStartDateChange = (newStart: string) => {
-    setStartDate(newStart);
-    // If To date is empty or was previously the same as the old start date, set To date to match new start
-    const newEnd = (!endDate || endDate === startDate) ? newStart : endDate;
-    setEndDate(newEnd);
-    checkAndSetPreset(newStart, newEnd);
+  // Project archive/restore handlers
+  const handleArchiveProject = (project: ProjectWithRole) => {
+    setProjectToArchive(project);
   };
 
-  const handleEndDateChange = (newEnd: string) => {
-    setEndDate(newEnd);
-    checkAndSetPreset(startDate, newEnd);
+  const handleRestoreProject = async (project: ProjectWithRole) => {
+    await archiveProject(project.id, false);
   };
 
-  // Check if manual dates match any known preset
-  const checkAndSetPreset = useCallback((s: string, e: string) => {
-    if (!s && !e) {
-      setActivePreset('all');
-    } else if (s === todayStr && e === todayStr) {
-      setActivePreset('today');
-    } else if (s === yesterdayStr && e === yesterdayStr) {
-      setActivePreset('yesterday');
-    } else if (s === sevenDaysAgoStr && e === todayStr) {
-      setActivePreset('last7');
-    } else if (s === firstDayOfMonthStr && e === todayStr) {
-      setActivePreset('thisMonth');
-    } else {
-      setActivePreset('custom');
-    }
-  }, [todayStr, yesterdayStr, sevenDaysAgoStr, firstDayOfMonthStr]);
-
-  const handleClearDates = () => {
-    setStartDate('');
-    setEndDate('');
-    setActivePreset('all');
+  const handleDeleteProject = (project: ProjectWithRole) => {
+    setProjectToDelete(project);
   };
 
-  const hasActiveFilters = searchQuery.trim() !== '' || activePreset !== 'all' || startDate !== '' || endDate !== '';
+  // Active vs Archived project lists
+  const activeProjects = useMemo(
+    () => projects.filter((p) => !p.is_archived),
+    [projects]
+  );
 
-  const handleResetFilters = () => {
-    setSearchQuery('');
-    handleClearDates();
-  };
+  const archivedProjects = useMemo(
+    () => projects.filter((p) => p.is_archived),
+    [projects]
+  );
 
-  // Filter and sort meetings
+  // Filter projects in the 'Active Projects' overview
+  const filteredActiveProjects = useMemo(() => {
+    if (!projectSearch.trim()) return activeProjects;
+    const query = projectSearch.toLowerCase().trim();
+    return activeProjects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(query) ||
+        (p.description && p.description.toLowerCase().includes(query))
+    );
+  }, [activeProjects, projectSearch]);
+
+  // Filter projects in the 'Archived' overview
+  const filteredArchivedProjects = useMemo(() => {
+    if (!archivedSearch.trim()) return archivedProjects;
+    const query = archivedSearch.toLowerCase().trim();
+    return archivedProjects.filter(
+      (p) =>
+        p.name.toLowerCase().includes(query) ||
+        (p.description && p.description.toLowerCase().includes(query))
+    );
+  }, [archivedProjects, archivedSearch]);
+
+  // Filter and sort meetings for the inside-project view
   const filteredAndSortedMeetings = useMemo(() => {
     let result = [...meetings];
 
-    // 1. Text Search Filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase().trim();
+    // Name search filter
+    if (meetingSearch.trim()) {
+      const query = meetingSearch.toLowerCase().trim();
       result = result.filter((m) => {
         const titleMatch = m.title.toLowerCase().includes(query);
-        const cleanedTitleMatch = cleanMeetingTitle(m.title, m.created_at).toLowerCase().includes(query);
-        const dateMatch = m.created_at ? formatMeetingDate(m.created_at).toLowerCase().includes(query) : false;
-        return titleMatch || cleanedTitleMatch || dateMatch;
+        const cleanedTitleMatch = cleanMeetingTitle(m.title, m.created_at)
+          .toLowerCase()
+          .includes(query);
+        return titleMatch || cleanedTitleMatch;
       });
     }
 
-    // 2. Date Filtering (Unified Range & Single Date)
-    if (startDate || endDate) {
+    // Date preset filter
+    if (dateFilter !== 'all') {
+      const now = new Date();
       result = result.filter((m) => {
         if (!m.created_at) return false;
         const meetingDate = new Date(m.created_at);
         if (isNaN(meetingDate.getTime())) return false;
-        const meetingDateStr = getLocalDateString(meetingDate);
 
-        if (startDate && endDate) {
-          const actualStart = startDate <= endDate ? startDate : endDate;
-          const actualEnd = startDate <= endDate ? endDate : startDate;
-          return meetingDateStr >= actualStart && meetingDateStr <= actualEnd;
-        } else if (startDate) {
-          return meetingDateStr >= startDate;
-        } else if (endDate) {
-          return meetingDateStr <= endDate;
+        switch (dateFilter) {
+          case 'today':
+            return meetingDate.toDateString() === now.toDateString();
+          case 'week': {
+            const startOfWeek = new Date(now);
+            startOfWeek.setDate(now.getDate() - now.getDay());
+            startOfWeek.setHours(0, 0, 0, 0);
+            return meetingDate >= startOfWeek;
+          }
+          case 'month': {
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+            return meetingDate >= startOfMonth;
+          }
+          case 'custom': {
+            if (customDateStart) {
+              const start = new Date(customDateStart);
+              start.setHours(0, 0, 0, 0);
+              if (meetingDate < start) return false;
+            }
+            if (customDateEnd) {
+              const end = new Date(customDateEnd);
+              end.setHours(23, 59, 59, 999);
+              if (meetingDate > end) return false;
+            }
+            return true;
+          }
+          default:
+            return true;
         }
-        return true;
       });
     }
 
-    // 3. Sorting
+    // Newest / Oldest sort filter
     result.sort((a, b) => {
       const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
       const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-
-      switch (sortOrder) {
-        case 'newest':
-          return timeB - timeA;
-        case 'oldest':
-          return timeA - timeB;
-        case 'titleAsc': {
-          const titleA = cleanMeetingTitle(a.title, a.created_at).toLowerCase();
-          const titleB = cleanMeetingTitle(b.title, b.created_at).toLowerCase();
-          return titleA.localeCompare(titleB);
-        }
-        case 'titleDesc': {
-          const titleA = cleanMeetingTitle(a.title, a.created_at).toLowerCase();
-          const titleB = cleanMeetingTitle(b.title, b.created_at).toLowerCase();
-          return titleB.localeCompare(titleA);
-        }
-        default:
-          return timeB - timeA;
-      }
+      return sortOrder === 'newest' ? timeB - timeA : timeA - timeB;
     });
 
     return result;
-  }, [
-    meetings,
-    searchQuery,
-    startDate,
-    endDate,
-    sortOrder
-  ]);
+  }, [meetings, meetingSearch, dateFilter, customDateStart, customDateEnd, sortOrder]);
 
   // Meeting deletion
   const handleDeleteConfirm = async () => {
@@ -248,12 +311,12 @@ export default function MeetingsPage() {
 
     try {
       await invoke('api_delete_meeting', { meetingId });
-      setMeetings(meetings.filter(m => m.id !== meetingId));
+      setMeetings(meetings.filter((m) => m.id !== meetingId));
       toast.success('Meeting deleted successfully');
     } catch (err: any) {
       console.error('Failed to delete meeting:', err);
       toast.error('Failed to delete meeting', {
-        description: err?.toString() || 'Unknown error'
+        description: err?.toString() || 'Unknown error',
       });
     } finally {
       setDeleteModalState({ isOpen: false, meetingId: null });
@@ -272,16 +335,18 @@ export default function MeetingsPage() {
     try {
       await invoke('api_save_meeting_title', {
         meetingId,
-        title: newTitle
+        title: newTitle,
       });
-      setMeetings(meetings.map(m => (m.id === meetingId ? { ...m, title: newTitle } : m)));
+      setMeetings(
+        meetings.map((m) => (m.id === meetingId ? { ...m, title: newTitle } : m))
+      );
       toast.success('Meeting title updated');
       setEditModalState({ isOpen: false, meetingId: null, currentTitle: '' });
       setEditingTitle('');
     } catch (err: any) {
       console.error('Failed to update title:', err);
       toast.error('Failed to update title', {
-        description: err?.toString() || 'Unknown error'
+        description: err?.toString() || 'Unknown error',
       });
     }
   };
@@ -292,387 +357,792 @@ export default function MeetingsPage() {
     router.push(`/meeting-details?id=${meeting.id}`);
   };
 
-  return (
-    <div className="min-h-screen bg-slate-50/70 p-6 md:p-10 flex flex-col">
-      {/* Top Header */}
-      <div className="max-w-6xl mx-auto w-full mb-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
-                Meeting Notes
-              </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200/60 shadow-2xs">
-                {activeProject?.name || 'Personal Project'}
-              </span>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200/60">
-                {meetings.length} {meetings.length === 1 ? 'call' : 'calls'}
-              </span>
-            </div>
-            <p className="text-sm text-slate-500 mt-1">
-              Filter by date range, search transcripts, and select any meeting to inspect full details and summaries.
-            </p>
-          </div>
+  // Find project name for an archived meeting
+  const getProjectName = (projectId?: string) => {
+    if (!projectId) return 'Personal Project';
+    const found = projects.find((p) => p.id === projectId);
+    return found ? found.name : 'Project';
+  };
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => router.push('/')}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-sm font-medium rounded-xl shadow-xs transition-all"
-            >
-              <Plus className="w-4 h-4" />
-              <span>New Call / Record</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Filter Controls Card */}
-        <div className="mt-6 bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
-          {/* Top Line: Search & Sort */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            {/* Search Input */}
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Search by title, keyword, or date..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-10 pr-10 py-2.5 bg-slate-50/50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 focus:bg-white transition-all placeholder:text-slate-400"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer"
-                  aria-label="Clear search"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Sort Dropdown */}
-            <div className="flex items-center gap-2 shrink-0">
-              <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-600">
-                <ArrowUpDown className="w-3.5 h-3.5 text-slate-400" />
-                <span className="text-slate-500">Sort:</span>
-                <select
-                  value={sortOrder}
-                  onChange={(e) => setSortOrder(e.target.value as SortOrder)}
-                  className="bg-transparent border-none text-slate-800 font-semibold focus:outline-none cursor-pointer pr-1"
-                >
-                  <option value="newest">Newest First</option>
-                  <option value="oldest">Oldest First</option>
-                  <option value="titleAsc">Title (A-Z)</option>
-                  <option value="titleDesc">Title (Z-A)</option>
-                </select>
-              </div>
-
-              {/* Reset Filters button */}
-              {hasActiveFilters && (
-                <button
-                  type="button"
-                  onClick={handleResetFilters}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/60 rounded-xl text-xs font-medium transition-colors cursor-pointer"
-                  title="Reset all filters"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Reset Filters</span>
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Bottom Line: Date Presets on Left + Always-Visible Date Range Calendar on Right */}
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-3 border-t border-slate-100">
-            {/* Quick Presets on Left */}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs font-medium text-slate-500 mr-1 flex items-center gap-1">
-                <Filter className="w-3 h-3 text-slate-400" /> Date:
-              </span>
-
-              {[
-                { id: 'all', label: 'All Dates' },
-                { id: 'today', label: 'Today' },
-                { id: 'yesterday', label: 'Yesterday' },
-                { id: 'last7', label: 'Last 7 Days' },
-                { id: 'thisMonth', label: 'This Month' },
-              ].map((tab) => {
-                const isActive = activePreset === tab.id;
-                return (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => handleSelectPreset(tab.id as DatePreset)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                      isActive
-                        ? 'bg-indigo-600 text-white shadow-xs'
-                        : 'bg-slate-100/90 text-slate-600 hover:bg-slate-200/80 hover:text-slate-900'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                );
-              })}
-
-              {activePreset === 'custom' && (
-                <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200/60">
-                  Custom
-                </span>
-              )}
-            </div>
-
-            {/* Always Visible Date Range Calendar on Right */}
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200/90 rounded-xl px-3 py-1.5 shrink-0 shadow-2xs self-start md:self-auto">
-              <CalendarRange className="w-4 h-4 text-indigo-600 shrink-0" />
-              <div className="flex items-center gap-1.5 text-xs text-slate-600 font-medium">
-                <span className="text-slate-400">From</span>
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => handleStartDateChange(e.target.value)}
-                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-                  title="Filter from this date (sets single date if To is the same)"
-                />
-                <span className="text-slate-400">To</span>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => handleEndDateChange(e.target.value)}
-                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-                  title="Filter to this date"
-                />
-                {(startDate || endDate) && (
-                  <button
-                    type="button"
-                    onClick={handleClearDates}
-                    className="p-1 hover:bg-slate-200/80 rounded-md text-slate-400 hover:text-slate-700 transition-colors cursor-pointer ml-0.5"
-                    title="Clear date filter"
-                    aria-label="Clear dates"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Results count indicator */}
-        <div className="flex items-center justify-between text-xs text-slate-500 mt-4 px-1">
-          <span>
-            Showing <strong className="text-slate-800 font-semibold">{filteredAndSortedMeetings.length}</strong> of {meetings.length} {meetings.length === 1 ? 'meeting' : 'meetings'}
+  const renderRoleBadge = (role: ProjectRole) => {
+    switch (role) {
+      case 'owner':
+        return (
+          <span className="inline-flex items-center px-3 py-0.5 rounded-full text-xs font-semibold bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]">
+            Owner
           </span>
-          {hasActiveFilters && (
-            <span className="text-indigo-600 font-medium">
-              Filtered view active
-            </span>
+        );
+      case 'team_leader':
+        return (
+          <span className="inline-flex items-center gap-1 px-3 py-0.5 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+            <Star className="w-3 h-3 text-purple-600" />
+            Team Leader
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-3 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 border border-gray-200">
+            <User className="w-3 h-3 text-gray-500" />
+            Member
+          </span>
+        );
+    }
+  };
+
+  return (
+    <div className="h-screen bg-gray-50 flex flex-col">
+      {/* Sticky Header — Aligned with Settings Page UI */}
+      <div className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200">
+        <div className="max-w-6xl mx-auto px-8 py-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              {selectedProject ? (
+                <div>
+                  <button
+                    onClick={handleBackToProjects}
+                    className="flex items-center gap-1.5 text-gray-600 hover:text-gray-900 transition-colors mb-3 text-sm font-medium"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    <span>Back to projects</span>
+                  </button>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">
+                      {selectedProject.name}
+                    </h1>
+                    {selectedProject.is_archived && (
+                      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1">
+                        <Archive className="w-3 h-3 text-amber-600" />
+                        Archived
+                      </span>
+                    )}
+                    {renderRoleBadge(selectedProject.role)}
+                    <span className="text-xs font-medium text-gray-600 px-2.5 py-1 rounded-full bg-gray-100 border border-gray-200">
+                      {meetings.length} {meetings.length === 1 ? 'call' : 'calls'}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {selectedProject.description || 'Workspace for meetings, transcripts, and summaries.'}
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900">Projects</h1>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Manage your active workspaces and access archived meeting records.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Header Actions */}
+            <div className="flex items-center gap-3 shrink-0">
+              {!selectedProject ? (
+                <Button
+                  variant="outline"
+                  onClick={() => setIsCreateProjectOpen(true)}
+                  className="flex items-center gap-2 border-gray-300 text-gray-700 hover:bg-gray-100 rounded-lg shadow-sm"
+                >
+                  <FolderPlus className="w-4 h-4 text-gray-600" />
+                  <span>New Project</span>
+                </Button>
+              ) : selectedProject.is_archived ? (
+                <Button
+                  variant="outline"
+                  onClick={() => handleRestoreProject(selectedProject)}
+                  className="flex items-center gap-2 border-amber-300 text-amber-900 hover:bg-amber-100 bg-white rounded-lg shadow-sm font-medium transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4 text-amber-700" />
+                  <span>Restore Project</span>
+                </Button>
+              ) : (
+                <div className="flex items-center gap-2.5">
+                  <Button
+                    variant="outline"
+                    onClick={() => setMembersModalProject(selectedProject)}
+                    className="flex items-center gap-2 border-gray-200 bg-white text-gray-800 hover:bg-gray-50 rounded-xl text-sm font-medium shadow-2xs h-10 px-3.5"
+                  >
+                    <Users className="w-4 h-4 text-gray-600" />
+                    <span>Members {selectedProject.member_count}</span>
+                  </Button>
+
+                  {(selectedProject.role === 'owner' || selectedProject.role === 'team_leader') && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setSettingsModalProject(selectedProject)}
+                      className="border-gray-200 bg-white text-gray-800 hover:bg-gray-50 rounded-xl shadow-2xs h-10 w-10 shrink-0"
+                      title="Project Settings"
+                    >
+                      <SettingsIcon className="w-4 h-4 text-gray-600" />
+                    </Button>
+                  )}
+
+                  <Button
+                    onClick={handleRecordForCurrentProject}
+                    className="flex items-center gap-2 bg-[#DC2626] hover:bg-[#b91c1c] text-white rounded-xl shadow-2xs font-medium text-sm h-10 px-4 transition-colors"
+                  >
+                    <Mic className="w-4 h-4" />
+                    <span>Record call</span>
+                  </Button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Header Tabs Bar — Only shown on Projects Overview (Active Projects / Archived) */}
+          {!selectedProject && (
+            <div className="mt-6">
+              <Tabs
+                value={overviewTab}
+                onValueChange={(val) => setOverviewTab(val as 'active' | 'archived')}
+              >
+                <TabsList className="bg-transparent relative rounded-none border-b border-gray-200 p-0 h-auto flex gap-1 justify-start">
+                  {OVERVIEW_TABS.map((tab, index) => {
+                    const Icon = tab.icon;
+                    const count = tab.id === 'active' ? activeProjects.length : archivedProjects.length;
+                    return (
+                      <TabsTrigger
+                        key={tab.id}
+                        value={tab.id}
+                        ref={(el) => {
+                          tabRefs.current[index] = el;
+                        }}
+                        className="flex items-center gap-2 px-6 py-3.5 bg-transparent rounded-none border-0 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none text-gray-600 hover:text-gray-900 relative z-10 text-sm font-medium transition-colors cursor-pointer"
+                      >
+                        <Icon className="w-4 h-4 shrink-0" />
+                        <span>{tab.label}</span>
+                        <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-gray-100 text-gray-600">
+                          {count}
+                        </span>
+                      </TabsTrigger>
+                    );
+                  })}
+
+                  <motion.div
+                    className="absolute bottom-0 z-20 h-0.5 bg-blue-600"
+                    layoutId="underline"
+                    style={{ left: underlineStyle.left, width: underlineStyle.width }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 40 }}
+                  />
+                </TabsList>
+              </Tabs>
+            </div>
           )}
         </div>
       </div>
 
-      {/* Meetings List View */}
-      <div className="max-w-6xl mx-auto w-full flex-1">
-        {filteredAndSortedMeetings.length === 0 ? (
-          <div className="bg-white border border-slate-200/80 rounded-2xl p-12 text-center shadow-xs max-w-lg mx-auto my-8">
-            <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-indigo-100">
-              <FileText className="w-7 h-7" />
-            </div>
-            <h3 className="text-lg font-semibold text-slate-900">
-              {hasActiveFilters ? 'No matching meetings found' : 'No meetings yet'}
-            </h3>
-            <p className="text-sm text-slate-500 mt-1.5 max-w-sm mx-auto leading-relaxed">
-              {hasActiveFilters
-                ? 'No meetings match your selected date range or search query. Try broadening your filter or clearing search.'
-                : 'Start your first call recording to automatically transcribe speech and generate AI summaries.'}
-            </p>
-            {hasActiveFilters ? (
-              <button
-                onClick={handleResetFilters}
-                className="mt-5 inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition-colors cursor-pointer"
-              >
-                <RotateCcw className="w-4 h-4" />
-                <span>Clear Filters</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => router.push('/')}
-                className="mt-5 inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-all cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Start Recording</span>
-              </button>
-            )}
-          </div>
-        ) : (
-          /* List Container */
-          <div className="bg-white border border-slate-200/90 rounded-2xl shadow-xs overflow-hidden">
-            {/* List Header */}
-            <div className="hidden md:grid grid-cols-12 gap-4 px-6 py-3 bg-slate-50/80 border-b border-slate-200/70 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              <div className="col-span-6">Meeting Name</div>
-              <div className="col-span-3">Date & Time</div>
-              <div className="col-span-2">Recorded</div>
-              <div className="col-span-1 text-right">Actions</div>
-            </div>
-
-            {/* List Items */}
-            <div className="divide-y divide-slate-100">
-              {filteredAndSortedMeetings.map((meeting) => {
-                const displayTitle = cleanMeetingTitle(meeting.title, meeting.created_at);
-                const formattedDate = meeting.created_at ? formatMeetingDate(meeting.created_at) : null;
-                const formattedTime = meeting.created_at ? formatMeetingTime(meeting.created_at) : null;
-                const relativeTag = meeting.created_at ? getRelativeTime(meeting.created_at) : null;
-
-                return (
-                  <div
-                    key={meeting.id}
-                    onClick={() => navigateToMeeting(meeting)}
-                    className="group relative px-5 sm:px-6 py-4 hover:bg-indigo-50/40 transition-colors duration-150 cursor-pointer flex flex-col md:grid md:grid-cols-12 md:gap-4 md:items-center"
-                  >
-                    {/* Meeting Title & Icon */}
-                    <div className="md:col-span-6 flex items-center gap-3.5 min-w-0">
-                      <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 border border-indigo-100/60 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
-                        <FileText className="w-4 h-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <h3 className="text-sm sm:text-base font-semibold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">
-                          {displayTitle}
-                        </h3>
-                        <p className="text-xs text-slate-400 truncate mt-0.5 md:hidden">
-                          {formattedDate} {formattedTime ? `• ${formattedTime}` : ''}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Date & Time (Desktop) */}
-                    <div className="hidden md:flex md:col-span-3 flex-col justify-center">
-                      {formattedDate && (
-                        <div className="flex items-center gap-1.5 text-xs text-slate-700 font-medium">
-                          <CalendarIcon className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                          <span>{formattedDate}</span>
-                        </div>
-                      )}
-                      {formattedTime && (
-                        <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mt-0.5">
-                          <Clock className="w-3 h-3 text-slate-400 shrink-0" />
-                          <span>{formattedTime}</span>
-                        </div>
+      {/* Scrollable Body Content */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-6xl mx-auto p-8 pt-6">
+          {/* ============================================================== */}
+          {/* VIEW 1: PROJECTS OVERVIEW (No specific project selected)        */}
+          {/* ============================================================== */}
+          {!selectedProject && (
+            <>
+              {/* TAB 1: ACTIVE PROJECTS */}
+              {overviewTab === 'active' && (
+                <div className="space-y-6">
+                  {/* Search projects bar */}
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="relative flex-1 max-w-md">
+                      <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Search projects..."
+                        value={projectSearch}
+                        onChange={(e) => setProjectSearch(e.target.value)}
+                        className="w-full pl-10 pr-10 py-2.5 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-900 placeholder:text-gray-400 shadow-sm transition-all"
+                      />
+                      {projectSearch && (
+                        <button
+                          onClick={() => setProjectSearch('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
                       )}
                     </div>
 
-                    {/* Relative Tag Badge */}
-                    <div className="hidden md:flex md:col-span-2 items-center">
-                      {relativeTag && (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200/60">
-                          {relativeTag}
-                        </span>
-                      )}
-                    </div>
+                    <span className="text-xs text-gray-500 font-medium">
+                      {filteredActiveProjects.length} {filteredActiveProjects.length === 1 ? 'project' : 'projects'} available
+                    </span>
+                  </div>
 
-                    {/* Actions & Open Arrow */}
-                    <div className="md:col-span-1 flex items-center justify-end gap-1 mt-2.5 md:mt-0 pt-2 md:pt-0 border-t border-slate-100 md:border-none">
-                      {/* Edit Button */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingTitle(meeting.title);
-                          setEditModalState({
-                            isOpen: true,
-                            meetingId: meeting.id,
-                            currentTitle: meeting.title,
-                          });
-                        }}
-                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                        title="Edit Meeting Title"
-                        aria-label="Edit title"
+                  {/* Projects Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {filteredActiveProjects.map((project) => (
+                      <div
+                        key={project.id}
+                        onClick={() => handleOpenProject(project)}
+                        className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm hover:border-blue-400 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between group"
                       >
-                        <Pencil className="w-4 h-4" />
-                      </button>
+                        <div>
+                          {/* Top Header of Card */}
+                          <div className="flex items-start justify-between gap-2 mb-3">
+                            <div className="w-10 h-10 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 group-hover:scale-105 transition-transform">
+                              <Folder className="w-5 h-5" />
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              {renderRoleBadge(project.role)}
+                            </div>
+                          </div>
 
-                      {/* Delete Button */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteModalState({
-                            isOpen: true,
-                            meetingId: meeting.id,
-                          });
-                        }}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                        title="Delete Meeting"
-                        aria-label="Delete meeting"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                          {/* Project Title & Description */}
+                          <h3 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
+                            {project.name}
+                          </h3>
+                          <p className="text-sm text-gray-600 line-clamp-2 mt-1.5 min-h-[40px]">
+                            {project.description || 'No description provided.'}
+                          </p>
+                        </div>
 
-                      {/* Open arrow icon */}
-                      <div className="pl-1 text-slate-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all">
-                        <ArrowRight className="w-4 h-4" />
+                        {/* Stats & Actions Footer */}
+                        <div className="pt-4 mt-4 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+                          <div className="flex items-center gap-3">
+                            <span className="flex items-center gap-1 font-medium text-gray-700">
+                              <NotebookPen className="w-3.5 h-3.5 text-gray-400" />
+                              {project.meeting_count} calls
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Users className="w-3.5 h-3.5 text-gray-400" />
+                              {project.member_count} members
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => setMembersModalProject(project)}
+                              className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 hover:text-gray-900 transition-colors"
+                              title="Manage Members"
+                            >
+                              <Users className="w-4 h-4" />
+                            </button>
+                            {(project.role === 'owner' || project.role === 'team_leader') && (
+                              <button
+                                type="button"
+                                onClick={() => setSettingsModalProject(project)}
+                                className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 hover:text-gray-900 transition-colors"
+                                title="Project Settings"
+                              >
+                                <SettingsIcon className="w-4 h-4" />
+                              </button>
+                            )}
+                            {(project.role === 'owner' || project.role === 'team_leader') && (
+                              <button
+                                type="button"
+                                onClick={() => handleArchiveProject(project)}
+                                className="p-1.5 hover:bg-amber-50 rounded-md text-gray-400 hover:text-amber-700 transition-colors"
+                                title="Archive Project"
+                              >
+                                <Archive className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
                       </div>
+                    ))}
+
+                    {/* Create Project Card */}
+                    <div
+                      onClick={() => setIsCreateProjectOpen(true)}
+                      className="rounded-lg border-2 border-dashed border-gray-300 hover:border-blue-400 hover:bg-blue-50/20 p-6 flex flex-col items-center justify-center text-center cursor-pointer transition-all min-h-[200px]"
+                    >
+                      <div className="w-11 h-11 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 mb-3">
+                        <FolderPlus className="w-5 h-5" />
+                      </div>
+                      <h4 className="text-sm font-semibold text-gray-900">Create New Project</h4>
+                      <p className="text-xs text-gray-500 mt-1 max-w-[200px]">
+                        Collaborate with teammates or organize separate work streams.
+                      </p>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              )}
+
+              {/* TAB 2: ARCHIVED PROJECTS */}
+              {overviewTab === 'archived' && (
+                <div className="space-y-6">
+                  {/* Search archived projects bar */}
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="relative flex-1 max-w-md">
+                      <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Search archived projects..."
+                        value={archivedSearch}
+                        onChange={(e) => setArchivedSearch(e.target.value)}
+                        className="w-full pl-10 pr-10 py-2.5 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-900 placeholder:text-gray-400 shadow-sm transition-all"
+                      />
+                      {archivedSearch && (
+                        <button
+                          onClick={() => setArchivedSearch('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+
+                    <span className="text-xs text-gray-500 font-medium">
+                      {filteredArchivedProjects.length} archived {filteredArchivedProjects.length === 1 ? 'project' : 'projects'}
+                    </span>
+                  </div>
+
+                  {/* Archived Projects Grid */}
+                  {filteredArchivedProjects.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {filteredArchivedProjects.map((project) => (
+                        <div
+                          key={project.id}
+                          onClick={() => handleOpenProject(project)}
+                          className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm hover:border-amber-400 hover:shadow-md transition-all cursor-pointer flex flex-col justify-between group"
+                        >
+                          <div>
+                            {/* Top Header of Card */}
+                            <div className="flex items-start justify-between gap-2 mb-3">
+                              <div className="w-10 h-10 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 group-hover:scale-105 transition-transform">
+                                <Archive className="w-5 h-5" />
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1">
+                                  <Archive className="w-3 h-3 text-amber-600" />
+                                  Archived
+                                </span>
+                                {renderRoleBadge(project.role)}
+                              </div>
+                            </div>
+
+                            {/* Project Title & Description */}
+                            <h3 className="text-lg font-semibold text-gray-900 group-hover:text-amber-700 transition-colors">
+                              {project.name}
+                            </h3>
+                            <p className="text-sm text-gray-600 line-clamp-2 mt-1.5 min-h-[40px]">
+                              {project.description || 'No description provided.'}
+                            </p>
+                          </div>
+
+                          {/* Stats & Actions Footer */}
+                          <div className="pt-4 mt-4 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+                            <div className="flex items-center gap-3">
+                              <span className="flex items-center gap-1 font-medium text-gray-700">
+                                <NotebookPen className="w-3.5 h-3.5 text-gray-400" />
+                                {project.meeting_count} calls
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Users className="w-3.5 h-3.5 text-gray-400" />
+                                {project.member_count} members
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRestoreProject(project)}
+                                className="h-7 px-2.5 rounded-md text-xs font-medium border-amber-200 text-amber-800 hover:bg-amber-100 flex items-center gap-1 transition-colors"
+                                title="Restore Project to Active"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
+                                <span>Restore</span>
+                              </Button>
+                              {project.role === 'owner' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteProject(project)}
+                                  className="p-1.5 hover:bg-red-50 rounded-md text-gray-400 hover:text-red-600 transition-colors"
+                                  title="Permanently Delete Project"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="bg-white rounded-lg border border-gray-200 p-12 text-center shadow-sm">
+                      <div className="w-12 h-12 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 mx-auto mb-3">
+                        <Archive className="w-6 h-6" />
+                      </div>
+                      <h3 className="text-base font-semibold text-gray-900">
+                        {archivedSearch ? 'No matching archived projects' : 'No archived projects'}
+                      </h3>
+                      <p className="text-sm text-gray-500 mt-1 max-w-sm mx-auto">
+                        {archivedSearch
+                          ? `No archived projects found matching "${archivedSearch}". Try adjusting your search query.`
+                          : 'Projects you archive will appear here. You can inspect older meetings or restore projects at any time.'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ============================================================== */}
+          {/* VIEW 2: INSIDE SPECIFIC PROJECT (selectedProject is active)    */}
+          {/* ============================================================== */}
+          {selectedProject && (
+            <div className="space-y-6">
+              {/* Archived Project Banner Notice */}
+              {selectedProject.is_archived && (
+                <div className="p-4 rounded-xl bg-amber-50/90 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center text-amber-700 shrink-0">
+                      <Archive className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-amber-900">This project is archived</p>
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        Historical meetings and transcripts are preserved below. Restore this project to resume recording calls.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleRestoreProject(selectedProject)}
+                    className="border-amber-300 bg-white hover:bg-amber-100 text-amber-900 rounded-lg shrink-0 text-xs font-semibold shadow-xs"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 mr-1.5 text-amber-700" />
+                    Restore Project
+                  </Button>
+                </div>
+              )}
+
+              {/* Search and Filters Card — Aligned with Screenshot */}
+              <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-2xs space-y-4">
+                {/* Search Row */}
+                <div className="relative w-full">
+                  <Search className="w-4 h-4 text-gray-400 absolute left-4 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Search meetings by name"
+                    value={meetingSearch}
+                    onChange={(e) => setMeetingSearch(e.target.value)}
+                    className="w-full pl-11 pr-10 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-900 placeholder:text-gray-400 shadow-2xs transition-all"
+                  />
+                  {meetingSearch && (
+                    <button
+                      onClick={() => setMeetingSearch('')}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
+                      aria-label="Clear search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Filter & Sort Row — As requested: Newest First in the same row as date filters */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  {/* Date Filter Buttons */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {DATE_FILTER_OPTIONS.map((filter) => {
+                      const Icon = filter.icon;
+                      const isActive = dateFilter === filter.id;
+                      return (
+                        <button
+                          key={filter.id}
+                          type="button"
+                          onClick={() => setDateFilter(filter.id)}
+                          className={`px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-1.5 transition-all cursor-pointer border ${
+                            isActive
+                              ? 'bg-gray-900 text-white border-gray-900 shadow-2xs'
+                              : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50 hover:border-gray-300'
+                          }`}
+                        >
+                          {Icon && <Icon className="w-3.5 h-3.5" />}
+                          <span>{filter.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Sort Order Dropdown — In the SAME ROW */}
+                  <div className="relative inline-flex items-center">
+                    <select
+                      value={sortOrder}
+                      onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                      className="appearance-none pl-9 pr-8 py-2 bg-white border border-gray-200 hover:border-gray-300 hover:bg-gray-50 rounded-xl text-sm font-medium text-gray-700 shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    >
+                      <option value="newest">Newest first</option>
+                      <option value="oldest">Oldest first</option>
+                    </select>
+                    <ArrowUpDown className="w-3.5 h-3.5 text-gray-500 absolute left-3 pointer-events-none" />
+                    <ChevronDown className="w-3.5 h-3.5 text-gray-400 absolute right-2.5 pointer-events-none" />
+                  </div>
+                </div>
+
+                {/* Custom Date Range Picker (Only shown when 'custom' is active) */}
+                {dateFilter === 'custom' && (
+                  <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-gray-100 text-xs">
+                    <span className="text-gray-500 font-medium">Custom range:</span>
+                    <div className="flex items-center gap-2">
+                      <label className="text-gray-600">From:</label>
+                      <input
+                        type="date"
+                        value={customDateStart}
+                        onChange={(e) => setCustomDateStart(e.target.value)}
+                        className="border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-800 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-gray-600">To:</label>
+                      <input
+                        type="date"
+                        value={customDateEnd}
+                        onChange={(e) => setCustomDateEnd(e.target.value)}
+                        className="border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-800 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    </div>
+                    {(customDateStart || customDateEnd) && (
+                      <button
+                        onClick={() => {
+                          setCustomDateStart('');
+                          setCustomDateEnd('');
+                        }}
+                        className="text-gray-400 hover:text-gray-600 underline ml-2"
+                      >
+                        Reset dates
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Showing X of Y meetings counter */}
+              <div className="px-1">
+                <span className="text-xs sm:text-sm font-medium text-gray-600">
+                  Showing {filteredAndSortedMeetings.length} of {meetings.length} meetings
+                </span>
+              </div>
+
+              {/* Meeting Records List */}
+              <div className="space-y-3">
+                {filteredAndSortedMeetings.length > 0 ? (
+                  filteredAndSortedMeetings.map((meeting) => (
+                    <div
+                      key={meeting.id}
+                      onClick={() => navigateToMeeting(meeting)}
+                      className="bg-white rounded-2xl border border-gray-200 p-4 shadow-2xs hover:border-gray-300 hover:shadow-xs transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-4 group"
+                    >
+                      <div className="flex items-center gap-4 min-w-0">
+                        <div className="w-11 h-11 rounded-xl bg-gray-50 border border-gray-200/80 flex items-center justify-center text-gray-700 shrink-0 group-hover:bg-blue-50 group-hover:text-blue-600 group-hover:border-blue-200 transition-colors">
+                          <FileText className="w-5 h-5" />
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="text-sm sm:text-base font-semibold text-gray-900 group-hover:text-blue-600 transition-colors truncate">
+                            {cleanMeetingTitle(meeting.title, meeting.created_at)}
+                          </h4>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {formatMeetingDate(meeting.created_at)} · {formatMeetingTime(meeting.created_at)}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Card Action Buttons */}
+                      <div
+                        className="flex items-center gap-2 shrink-0 self-end sm:self-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingTitle(cleanMeetingTitle(meeting.title, meeting.created_at));
+                            setEditModalState({
+                              isOpen: true,
+                              meetingId: meeting.id,
+                              currentTitle: meeting.title,
+                            });
+                          }}
+                          className="p-2 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                          title="Rename meeting"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDeleteModalState({
+                              isOpen: true,
+                              meetingId: meeting.id,
+                            })
+                          }
+                          className="p-2 text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete meeting"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigateToMeeting(meeting)}
+                          className="text-gray-800 hover:text-blue-600 hover:bg-blue-50/60 flex items-center gap-1.5 text-sm font-medium px-3 h-9"
+                        >
+                          <span>Open</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center shadow-2xs">
+                    <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 mx-auto mb-3">
+                      <FileText className="w-6 h-6" />
+                    </div>
+                    <h3 className="text-base font-semibold text-gray-900">
+                      {meetingSearch || dateFilter !== 'all' ? 'No matching meetings' : 'No meetings in this project yet'}
+                    </h3>
+                    <p className="text-sm text-gray-500 mt-1 max-w-sm mx-auto">
+                      {meetingSearch || dateFilter !== 'all'
+                        ? 'Try adjusting your search query or clear the filter.'
+                        : 'Recordings made while this project is active will be automatically organized here.'}
+                    </p>
+                    {(meetingSearch || dateFilter !== 'all') && (
+                      <div className="mt-4 flex items-center justify-center gap-2">
+                        {meetingSearch && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setMeetingSearch('')}
+                            className="text-xs"
+                          >
+                            Clear Search
+                          </Button>
+                        )}
+                        {dateFilter !== 'all' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setDateFilter('all');
+                              setCustomDateStart('');
+                              setCustomDateEnd('');
+                            }}
+                            className="text-xs"
+                          >
+                            Reset Date Filter
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {/* Delete Confirmation Modal */}
-      <ConfirmationModal
-        isOpen={deleteModalState.isOpen}
-        onCancel={() => setDeleteModalState({ isOpen: false, meetingId: null })}
-        onConfirm={handleDeleteConfirm}
-        text="Are you sure you want to delete this meeting? All transcripts and AI summaries associated with it will be permanently removed."
+      {/* Project Management Dialogs */}
+      <CreateProjectDialog
+        isOpen={isCreateProjectOpen}
+        onClose={() => setIsCreateProjectOpen(false)}
       />
 
-      {/* Edit Title Modal */}
+      <ProjectMembersDialog
+        isOpen={!!membersModalProject}
+        onClose={() => setMembersModalProject(null)}
+        project={membersModalProject}
+      />
+
+      <ProjectSettingsDialog
+        isOpen={!!settingsModalProject}
+        onClose={() => setSettingsModalProject(null)}
+        project={settingsModalProject}
+      />
+
+      {/* Meeting Title Edit Dialog */}
       <Dialog
         open={editModalState.isOpen}
         onOpenChange={(open) => !open && setEditModalState({ isOpen: false, meetingId: null, currentTitle: '' })}
       >
-        <DialogContent className="sm:max-w-md">
-          <VisuallyHidden>
-            <DialogTitle>Edit Meeting Title</DialogTitle>
-          </VisuallyHidden>
-          <div className="p-4">
-            <h3 className="text-lg font-semibold text-slate-900 mb-2">Edit Meeting Title</h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Enter a new title for this meeting.
-            </p>
+        <DialogContent className="sm:max-w-md bg-white rounded-xl shadow-xl border border-gray-200 p-6">
+          <DialogTitle className="text-lg font-semibold text-gray-900">
+            Edit Meeting Title
+          </DialogTitle>
+          <div className="mt-4">
+            <label className="text-xs font-semibold text-gray-700 block mb-1.5">
+              Title
+            </label>
             <Input
               value={editingTitle}
               onChange={(e) => setEditingTitle(e.target.value)}
-              placeholder="e.g. Weekly Sync with Team"
-              className="w-full"
+              placeholder="Meeting Title"
+              className="rounded-lg border-gray-200 focus-visible:ring-blue-500"
               autoFocus
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleEditConfirm();
-                }
+                if (e.key === 'Enter') handleEditConfirm();
               }}
             />
           </div>
-          <DialogFooter className="flex justify-end gap-2 px-4 pb-4">
+          <DialogFooter className="mt-6 flex justify-end gap-2">
             <Button
               variant="outline"
               size="sm"
               onClick={() => setEditModalState({ isOpen: false, meetingId: null, currentTitle: '' })}
+              className="rounded-lg text-xs"
             >
               Cancel
             </Button>
             <Button
               size="sm"
               onClick={handleEditConfirm}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white"
+              className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs"
             >
-              Save Title
+              Save Changes
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Meeting Delete Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={deleteModalState.isOpen}
+        text="Are you sure you want to delete this meeting? This will permanently delete the transcript and all summaries."
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteModalState({ isOpen: false, meetingId: null })}
+      />
+
+      {/* Project Archive Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={!!projectToArchive}
+        title="Archive Project"
+        confirmText="Archive"
+        confirmColor="bg-amber-600 hover:bg-amber-700"
+        text={`Are you sure you want to archive "${projectToArchive?.name}"? It will be moved to the Archived tab.`}
+        onConfirm={async () => {
+          if (projectToArchive) {
+            await archiveProject(projectToArchive.id, true);
+            if (selectedProject?.id === projectToArchive.id) {
+              setSelectedProject(null);
+            }
+            setProjectToArchive(null);
+          }
+        }}
+        onCancel={() => setProjectToArchive(null)}
+      />
+
+      {/* Project Delete Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={!!projectToDelete}
+        text={`Are you sure you want to permanently delete "${projectToDelete?.name}"? All associated meetings and transcripts will be permanently removed.`}
+        onConfirm={async () => {
+          if (projectToDelete) {
+            await deleteProject(projectToDelete.id);
+            if (selectedProject?.id === projectToDelete.id) {
+              setSelectedProject(null);
+            }
+            setProjectToDelete(null);
+          }
+        }}
+        onCancel={() => setProjectToDelete(null)}
+      />
     </div>
   );
 }

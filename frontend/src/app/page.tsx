@@ -21,17 +21,24 @@ import { TranscriptRecovery } from '@/components/TranscriptRecovery';
 import { indexedDBService } from '@/services/indexedDBService';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
+import { SelectProjectDialog, CreateProjectDialog } from '@/components/Project';
+import { useProject } from '@/contexts/ProjectContext';
+import { X } from 'lucide-react';
 
 export default function Home() {
   // Local page state (not moved to contexts)
   const [isRecording, setIsRecordingState] = useState(false);
   const [barHeights, setBarHeights] = useState(['58%', '76%', '58%']);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [isSelectProjectOpen, setIsSelectProjectOpen] = useState(false);
+  const [isCreateProjectOpen, setIsCreateProjectOpen] = useState(false);
+  const [noProjectNotice, setNoProjectNotice] = useState(false);
 
   // Use contexts for state management
   const { meetingTitle } = useTranscripts();
   const { transcriptModelConfig, selectedDevices } = useConfig();
   const recordingState = useRecordingState();
+  const { switchProject, projects } = useProject();
 
   // Extract status from global state
   const { status, isStopping, isProcessing, isSaving } = recordingState;
@@ -42,6 +49,37 @@ export default function Home() {
   const { modals, messages, showModal, hideModal } = useModalState(transcriptModelConfig);
   const { isRecordingDisabled, setIsRecordingDisabled } = useRecordingStateSync(isRecording, setIsRecordingState, setIsMeetingActive);
   const { handleRecordingStart } = useRecordingStart(isRecording, setIsRecordingState, showModal);
+
+  // Auto-dismiss middle bottom info notice
+  useEffect(() => {
+    if (noProjectNotice) {
+      const timer = setTimeout(() => setNoProjectNotice(false), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [noProjectNotice]);
+
+  const handleInitiateRecording = () => {
+    const activeProjects = projects.filter((p) => !p.is_archived);
+    if (activeProjects.length === 0) {
+      setNoProjectNotice(true);
+      toast.info('You need to create a project first', {
+        position: 'bottom-center',
+        duration: 4000,
+      });
+      return;
+    }
+    setIsSelectProjectOpen(true);
+  };
+
+  const handleConfirmProjectAndStart = async (projectId: string) => {
+    try {
+      setIsSelectProjectOpen(false);
+      await switchProject(projectId);
+      await handleRecordingStart();
+    } catch (err) {
+      console.error('Failed to start recording after project selection:', err);
+    }
+  };
 
   // Get handleRecordingStop function and setIsStopping (state comes from global context)
   const { handleRecordingStop, setIsStopping } = useRecordingStop(
@@ -235,7 +273,7 @@ export default function Home() {
                     <RecordingControls
                       isRecording={recordingState.isRecording}
                       onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
-                      onRecordingStart={handleRecordingStart}
+                      onRecordingStart={handleInitiateRecording}
                       onTranscriptReceived={() => { }} // Not actually used by RecordingControls
                       onStopInitiated={() => setIsStopping(true)}
                       barHeights={barHeights}
@@ -259,6 +297,42 @@ export default function Home() {
           isSaving={status === RecordingStatus.SAVING}
           sidebarCollapsed={sidebarCollapsed}
         />
+
+        {/* Project Selection Dialog for Manual Recording Start */}
+        <SelectProjectDialog
+          isOpen={isSelectProjectOpen}
+          onClose={() => setIsSelectProjectOpen(false)}
+          onConfirm={handleConfirmProjectAndStart}
+        />
+
+        {/* Create Project Dialog */}
+        <CreateProjectDialog
+          isOpen={isCreateProjectOpen}
+          onClose={() => setIsCreateProjectOpen(false)}
+        />
+
+        {/* Middle Bottom Info Message: You need to create a project first */}
+        {noProjectNotice && (
+          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-gray-900 text-white px-5 py-3 rounded-xl shadow-2xl border border-gray-700 animate-in fade-in slide-in-from-bottom-4 duration-200">
+            <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+            <span className="text-sm font-medium">You need to create a project first</span>
+            <button
+              onClick={() => {
+                setNoProjectNotice(false);
+                setIsCreateProjectOpen(true);
+              }}
+              className="ml-2 px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-all cursor-pointer"
+            >
+              Create Project
+            </button>
+            <button
+              onClick={() => setNoProjectNotice(false)}
+              className="ml-1 text-gray-400 hover:text-white p-0.5 rounded transition-colors cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
     </motion.div>
   );
