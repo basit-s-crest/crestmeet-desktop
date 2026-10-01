@@ -39,12 +39,14 @@ export function ObservabilityDrawer() {
     return () => unsubscribe();
   }, []);
 
-  // Global shortcut: Ctrl + Shift + O or Cmd + Shift + O
+  // Global shortcut: Ctrl + Shift + O (or Cmd + Shift + O) to toggle, Esc to close
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'O' || e.key === 'o')) {
         e.preventDefault();
         setIsOpen((prev) => !prev);
+      } else if (e.key === 'Escape') {
+        setIsOpen(false);
       }
     };
 
