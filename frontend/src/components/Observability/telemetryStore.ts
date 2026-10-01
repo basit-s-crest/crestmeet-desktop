@@ -17,13 +17,26 @@ class TelemetryStore {
     };
   }
 
+  private notifyScheduled = false;
+
   private notify() {
-    this.listeners.forEach((listener) => {
-      try {
-        listener();
-      } catch (e) {
-        console.error('[TelemetryStore] Listener error:', e);
-      }
+    if (this.notifyScheduled) return;
+    this.notifyScheduled = true;
+
+    // Batch updates asynchronously to prevent blocking the main thread or React render cycles
+    const schedule = typeof window !== 'undefined' && window.requestAnimationFrame
+      ? window.requestAnimationFrame
+      : (fn: () => void) => setTimeout(fn, 16);
+
+    schedule(() => {
+      this.notifyScheduled = false;
+      this.listeners.forEach((listener) => {
+        try {
+          listener();
+        } catch {
+          // Do not call console.error here to avoid mutual recursion with console interceptor
+        }
+      });
     });
   }
 

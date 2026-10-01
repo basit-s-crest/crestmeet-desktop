@@ -3,6 +3,27 @@ import { LogLevel } from './types';
 
 let initialized = false;
 
+function safeStringify(obj: any, maxLen = 2000): string {
+  try {
+    if (obj === null || obj === undefined) return String(obj);
+    if (typeof obj === 'string') return obj.slice(0, maxLen);
+    if (typeof obj === 'number' || typeof obj === 'boolean') return String(obj);
+    if (obj instanceof Error) return `${obj.name}: ${obj.message}\n${obj.stack || ''}`;
+
+    const seen = new WeakSet();
+    const str = JSON.stringify(obj, (_key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value)) return '[Circular]';
+        seen.add(value);
+      }
+      return value;
+    });
+    return str.length > maxLen ? str.slice(0, maxLen) + '...' : str;
+  } catch {
+    return String(obj);
+  }
+}
+
 export function initializeInterceptors() {
   if (typeof window === 'undefined' || initialized) {
     return;
@@ -20,20 +41,8 @@ export function initializeInterceptors() {
   const wrapConsole = (level: LogLevel) => {
     return (...args: any[]) => {
       try {
-        // Format message
-        const message = args
-          .map((arg) => {
-            if (typeof arg === 'string') return arg;
-            if (arg instanceof Error) return `${arg.name}: ${arg.message}\n${arg.stack || ''}`;
-            try {
-              return JSON.stringify(arg);
-            } catch {
-              return String(arg);
-            }
-          })
-          .join(' ');
+        const message = args.map((arg) => safeStringify(arg, 1000)).join(' ');
 
-        // Extract stack trace if error
         let stack: string | undefined;
         if (level === 'error') {
           const errArg = args.find((a) => a instanceof Error);
@@ -49,14 +58,17 @@ export function initializeInterceptors() {
           message,
           args: args.map((a) => {
             try {
-              return typeof a === 'object' && a !== null ? JSON.parse(JSON.stringify(a)) : a;
+              if (typeof a === 'object' && a !== null) {
+                return JSON.parse(safeStringify(a, 1500));
+              }
+              return a;
             } catch {
               return String(a);
             }
           }),
           stack,
         });
-      } catch (e) {
+      } catch {
         // Fail silently so console never breaks
       }
 
@@ -120,7 +132,7 @@ export function initializeInterceptors() {
           requestBody = '[Binary/FormData]';
         }
       } catch {
-        requestBody = String(config.body);
+        requestBody = String(config.body).slice(0, 1000);
       }
     }
 
@@ -143,7 +155,8 @@ export function initializeInterceptors() {
         const cloned = response.clone();
         const contentType = cloned.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
-          responseBody = await cloned.json();
+          const json = await cloned.json();
+          responseBody = typeof json === 'object' && json !== null ? JSON.parse(safeStringify(json, 2500)) : json;
         } else if (contentType.includes('text/')) {
           responseBody = (await cloned.text()).slice(0, 1000);
         }
@@ -224,7 +237,7 @@ export function initializeInterceptors() {
     return originalXhrSend.apply(this, arguments as any);
   };
 
-  // 5. Organic Tauri IPC Interception (safely handled for frozen __TAURI_INTERNALS__)
+  // 5. Organic Tauri IPC Interception (safely handled with recursion protection)
   const attachTauriIpcInterceptor = () => {
     try {
       const tauriGlobal = (window as any).__TAURI_INTERNALS__;
@@ -233,7 +246,15 @@ export function initializeInterceptors() {
       const originalIpcInvoke = tauriGlobal.invoke;
       if (typeof originalIpcInvoke !== 'function') return;
 
+      let isExecutingInvoke = false;
+
       const wrappedInvoke = async function (cmd: string, args?: any, options?: any) {
+        // Prevent recursive loop if Tauri internally re-invokes
+        if (isExecutingInvoke) {
+          return originalIpcInvoke.call(tauriGlobal, cmd, args, options);
+        }
+
+        isExecutingInvoke = true;
         const start = performance.now();
         const netId = telemetryStore.addNetwork({
           type: 'ipc',
@@ -242,17 +263,24 @@ export function initializeInterceptors() {
           url: `tauri://${cmd}`,
           domain: 'Rust Core',
           status: 'pending',
-          requestBody: args,
+          requestBody: args ? JSON.parse(safeStringify(args, 1000)) : undefined,
         });
 
         try {
           const result = await originalIpcInvoke.call(tauriGlobal, cmd, args, options);
           const durationMs = Math.round(performance.now() - start);
+
+          // Truncate response representation to prevent memory bloat on large arrays
+          let previewResult: any = result;
+          if (typeof result === 'object' && result !== null) {
+            previewResult = JSON.parse(safeStringify(result, 2000));
+          }
+
           telemetryStore.updateNetwork(netId, {
             status: 200,
             statusText: 'OK',
             durationMs,
-            responseBody: result,
+            responseBody: previewResult,
           });
           return result;
         } catch (err: any) {
@@ -264,10 +292,11 @@ export function initializeInterceptors() {
             error: typeof err === 'string' ? err : err?.message || JSON.stringify(err),
           });
           throw err;
+        } finally {
+          isExecutingInvoke = false;
         }
       };
 
-      // Attempt 1: Try modifying the invoke property if configurable
       try {
         Object.defineProperty(tauriGlobal, 'invoke', {
           value: wrappedInvoke,
@@ -280,7 +309,6 @@ export function initializeInterceptors() {
         // tauriGlobal itself is frozen by Tauri runtime
       }
 
-      // Attempt 2: Try proxying window.__TAURI_INTERNALS__
       try {
         const proxied = new Proxy(tauriGlobal, {
           get(target, prop, receiver) {
@@ -298,7 +326,7 @@ export function initializeInterceptors() {
         });
         (window as any)._tauriIpcIntercepted = true;
       } catch {
-        // window.__TAURI_INTERNALS__ is strictly non-configurable; fail safely
+        // Fail safely
       }
     } catch {
       // Never crash the application
@@ -308,7 +336,7 @@ export function initializeInterceptors() {
   attachTauriIpcInterceptor();
   setTimeout(attachTauriIpcInterceptor, 500);
 
-  // 6. Organic User Actions Interception (Breadcrumbs)
+  // 6. Organic User Actions Interception (Bubbling phase, non-blocking)
   document.addEventListener(
     'click',
     (event) => {
@@ -321,12 +349,11 @@ export function initializeInterceptors() {
           return;
         }
 
-        // Get meaningful description of element
         const tagName = target.tagName.toLowerCase();
         const id = target.id ? `#${target.id}` : '';
         const role = target.getAttribute('role') ? `[role="${target.getAttribute('role')}"]` : '';
         const ariaLabel = target.getAttribute('aria-label') ? ` "${target.getAttribute('aria-label')}"` : '';
-        
+
         let textContent = target.innerText?.trim() || target.textContent?.trim() || '';
         if (textContent.length > 30) {
           textContent = textContent.slice(0, 30) + '...';
@@ -346,32 +373,22 @@ export function initializeInterceptors() {
         // ignore
       }
     },
-    true
+    false // Bubbling phase so we NEVER block or delay user clicks!
   );
 
-  // Navigation tracking
-  const recordNav = () => {
+  // Navigation tracking using non-invasive popstate
+  window.addEventListener('popstate', () => {
     telemetryStore.addAction({
       type: 'navigation',
       target: window.location.pathname + window.location.search,
       details: document.title ? `Title: ${document.title}` : undefined,
     });
-  };
-
-  window.addEventListener('popstate', recordNav);
-  const originalPushState = history.pushState;
-  history.pushState = function (...args) {
-    const res = originalPushState.apply(this, args);
-    recordNav();
-    return res;
-  };
-  const originalReplaceState = history.replaceState;
-  history.replaceState = function (...args) {
-    const res = originalReplaceState.apply(this, args);
-    recordNav();
-    return res;
-  };
+  });
 
   // Record initial page load
-  recordNav();
+  telemetryStore.addAction({
+    type: 'navigation',
+    target: window.location.pathname + window.location.search,
+    details: document.title ? `Title: ${document.title}` : undefined,
+  });
 }

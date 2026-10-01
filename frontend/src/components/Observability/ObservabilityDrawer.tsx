@@ -54,6 +54,22 @@ export function ObservabilityDrawer() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // Safe, non-invasive navigation tracking without monkey-patching Next.js router
+  useEffect(() => {
+    let lastPath = typeof window !== 'undefined' ? window.location.pathname : '';
+    const interval = setInterval(() => {
+      if (typeof window !== 'undefined' && window.location.pathname !== lastPath) {
+        lastPath = window.location.pathname;
+        telemetryStore.addAction({
+          type: 'navigation',
+          target: window.location.pathname + window.location.search,
+          details: document.title ? `Title: ${document.title}` : undefined,
+        });
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const handleExport = () => {
     const jsonString = telemetryStore.exportReport();
     const blob = new Blob([jsonString], { type: 'application/json' });
