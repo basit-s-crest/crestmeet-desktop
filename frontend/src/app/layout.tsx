@@ -29,7 +29,7 @@ import { AuthProvider } from '@/contexts/AuthContext'
 import { AuthGate } from '@/components/auth/AuthGate'
 import { ProjectProvider } from '@/contexts/ProjectContext'
 import { IncomingMediaRequestBanner } from '@/components/IncomingMediaRequestBanner'
-import { ObservabilityDrawer } from '@/observability'
+import { ObservabilityDrawer } from '@/components/Observability'
 
 const sourceSans3 = Source_Sans_3({
   subsets: ['latin'],

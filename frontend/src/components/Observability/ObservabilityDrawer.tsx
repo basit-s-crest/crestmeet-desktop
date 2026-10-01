@@ -95,15 +95,25 @@ export function ObservabilityDrawer() {
           onClick={() => setIsOpen(true)}
           data-observability-panel="true"
           title="Open DevTools Observability (Ctrl+Shift+O)"
-          className="fixed bottom-4 right-4 z-[99998] flex items-center gap-2 bg-neutral-900/90 hover:bg-neutral-800 text-neutral-200 text-xs px-3 py-1.5 rounded-full border border-neutral-700/80 shadow-2xl backdrop-blur transition-all hover:scale-105 active:scale-95 group font-sans"
+          style={{
+            position: 'fixed',
+            bottom: '20px',
+            right: '20px',
+            zIndex: 99998,
+            backgroundColor: '#18181b',
+            color: '#fafafa',
+            border: '1px solid #3f3f46',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+          }}
+          className="flex items-center gap-2 text-xs px-3.5 py-2 rounded-full backdrop-blur transition-all hover:scale-105 active:scale-95 group font-sans cursor-pointer"
         >
-          <div className="relative">
+          <div className="relative flex items-center">
             <Activity className="w-3.5 h-3.5 text-sky-400 group-hover:rotate-12 transition-transform" />
             {(errorCount > 0 || networkErrorCount > 0) && (
               <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-rose-500 animate-ping" />
             )}
           </div>
-          <span className="font-medium text-[11px]">DevTools</span>
+          <span className="font-medium text-[11px] tracking-wide">DevTools</span>
           {(errorCount > 0 || networkErrorCount > 0) && (
             <span className="bg-rose-600 text-white font-bold text-[10px] px-1.5 py-0.2 rounded-full">
               {errorCount + networkErrorCount}
@@ -116,9 +126,24 @@ export function ObservabilityDrawer() {
       {isOpen && (
         <div
           data-observability-panel="true"
-          className={`fixed top-0 right-0 h-full z-[99999] bg-neutral-950/95 text-neutral-100 border-l border-neutral-800 shadow-2xl backdrop-blur-md flex flex-col font-sans transition-all duration-200 select-none ${
-            isExpanded ? 'w-[680px]' : 'w-[420px]'
-          }`}
+          style={{
+            position: 'fixed',
+            top: 0,
+            right: 0,
+            width: isExpanded ? '660px' : '440px',
+            maxWidth: '92vw',
+            height: '100vh',
+            maxHeight: '100vh',
+            zIndex: 99999,
+            backgroundColor: '#090a0f',
+            color: '#f4f4f5',
+            boxShadow: '-8px 0 35px rgba(0, 0, 0, 0.75)',
+            borderLeft: '1px solid #27272a',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+          className="font-sans transition-all duration-200 select-none"
         >
           {/* Top Bar */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-800 bg-neutral-900/80">

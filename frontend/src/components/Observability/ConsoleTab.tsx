@@ -133,26 +133,28 @@ export function ConsoleTab() {
                 }`}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {hasDetails && (
-                      <span className="text-neutral-500">
+                      <span className="text-neutral-500 shrink-0">
                         {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                       </span>
                     )}
-                    {getLevelBadge(log.level)}
-                    <span className="text-[10px] text-neutral-500">{log.timestamp}</span>
+                    <div className="shrink-0">{getLevelBadge(log.level)}</div>
+                    <span className="text-[10px] text-neutral-400 font-mono shrink-0">{log.timestamp}</span>
                   </div>
 
                   <button
                     onClick={(e) => copyLog(log, e)}
-                    className="p-0.5 hover:bg-neutral-800 text-neutral-500 hover:text-neutral-300 rounded"
+                    className="p-1 hover:bg-neutral-800 text-neutral-500 hover:text-neutral-300 rounded shrink-0"
                     title="Copy log entry"
                   >
                     {copiedId === log.id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
                   </button>
                 </div>
 
-                <div className="pl-4 break-words whitespace-pre-wrap">{log.message}</div>
+                <div className="text-[11px] text-neutral-200 break-words whitespace-pre-wrap font-mono leading-relaxed select-text mt-0.5">
+                  {log.message}
+                </div>
 
                 {isExpanded && (
                   <div className="mt-2 pl-4 space-y-2 text-[10px] text-neutral-400 border-t border-neutral-800/60 pt-2">
