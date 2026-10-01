@@ -29,6 +29,7 @@ import { AuthProvider } from '@/contexts/AuthContext'
 import { AuthGate } from '@/components/auth/AuthGate'
 import { ProjectProvider } from '@/contexts/ProjectContext'
 import { IncomingMediaRequestBanner } from '@/components/IncomingMediaRequestBanner'
+import { ObservabilityDrawer } from '@/observability'
 
 const sourceSans3 = Source_Sans_3({
   subsets: ['latin'],
@@ -301,6 +302,7 @@ export default function RootLayout({
         </AnalyticsProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
+        <ObservabilityDrawer />
       </body>
     </html>
   )
