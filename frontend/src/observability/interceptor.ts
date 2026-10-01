@@ -224,14 +224,16 @@ export function initializeInterceptors() {
     return originalXhrSend.apply(this, arguments as any);
   };
 
-  // 5. Organic Tauri IPC Interception
+  // 5. Organic Tauri IPC Interception (safely handled for frozen __TAURI_INTERNALS__)
   const attachTauriIpcInterceptor = () => {
-    const tauriGlobal = (window as any).__TAURI_INTERNALS__;
-    if (tauriGlobal && typeof tauriGlobal.invoke === 'function' && !tauriGlobal._observabilityPatched) {
-      tauriGlobal._observabilityPatched = true;
-      const originalIpcInvoke = tauriGlobal.invoke;
+    try {
+      const tauriGlobal = (window as any).__TAURI_INTERNALS__;
+      if (!tauriGlobal || (window as any)._tauriIpcIntercepted) return;
 
-      tauriGlobal.invoke = async function (cmd: string, args?: any, options?: any) {
+      const originalIpcInvoke = tauriGlobal.invoke;
+      if (typeof originalIpcInvoke !== 'function') return;
+
+      const wrappedInvoke = async function (cmd: string, args?: any, options?: any) {
         const start = performance.now();
         const netId = telemetryStore.addNetwork({
           type: 'ipc',
@@ -244,7 +246,7 @@ export function initializeInterceptors() {
         });
 
         try {
-          const result = await originalIpcInvoke.apply(this, arguments as any);
+          const result = await originalIpcInvoke.call(tauriGlobal, cmd, args, options);
           const durationMs = Math.round(performance.now() - start);
           telemetryStore.updateNetwork(netId, {
             status: 200,
@@ -264,10 +266,45 @@ export function initializeInterceptors() {
           throw err;
         }
       };
+
+      // Attempt 1: Try modifying the invoke property if configurable
+      try {
+        Object.defineProperty(tauriGlobal, 'invoke', {
+          value: wrappedInvoke,
+          writable: true,
+          configurable: true,
+        });
+        (window as any)._tauriIpcIntercepted = true;
+        return;
+      } catch {
+        // tauriGlobal itself is frozen by Tauri runtime
+      }
+
+      // Attempt 2: Try proxying window.__TAURI_INTERNALS__
+      try {
+        const proxied = new Proxy(tauriGlobal, {
+          get(target, prop, receiver) {
+            if (prop === 'invoke') {
+              return wrappedInvoke;
+            }
+            return Reflect.get(target, prop, receiver);
+          },
+        });
+
+        Object.defineProperty(window, '__TAURI_INTERNALS__', {
+          value: proxied,
+          writable: true,
+          configurable: true,
+        });
+        (window as any)._tauriIpcIntercepted = true;
+      } catch {
+        // window.__TAURI_INTERNALS__ is strictly non-configurable; fail safely
+      }
+    } catch {
+      // Never crash the application
     }
   };
 
-  // Run immediately and check after a small delay in case Tauri internals load asynchronously
   attachTauriIpcInterceptor();
   setTimeout(attachTauriIpcInterceptor, 500);
 
