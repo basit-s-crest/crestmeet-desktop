@@ -635,6 +635,10 @@ pub fn run() {
             api::auth_signup,
             api::auth_logout,
             api::auth_restore_session,
+            api::auth_check_email_exists,
+            api::auth_reset_password,
+            api::auth_request_reset_otp,
+            api::auth_verify_and_reset_password,
             api::set_active_user,
             api::clear_active_user,
             api::get_active_user,
@@ -756,6 +760,8 @@ pub fn run() {
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,
             audio::permissions::trigger_system_audio_permission_command,
+            audio::permissions::check_microphone_permission_command,
+            audio::permissions::open_microphone_settings_command,
             // Database import commands
             database::commands::check_first_launch,
             database::commands::select_legacy_database_path,
@@ -776,10 +782,6 @@ pub fn run() {
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,
-            // Retranscription commands
-            audio::retranscription::start_retranscription_command,
-            audio::retranscription::cancel_retranscription_command,
-            audio::retranscription::is_retranscription_in_progress_command,
             // Import audio commands
             audio::import::select_and_validate_audio_command,
             audio::import::validate_audio_file_command,

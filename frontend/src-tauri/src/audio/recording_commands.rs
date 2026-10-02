@@ -89,6 +89,20 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         return Err("Recording already in progress".to_string());
     }
 
+    // Validate Windows microphone privacy permissions before starting recording
+    let (mic_allowed, mic_err_msg) = super::permissions::check_microphone_permission();
+    if !mic_allowed {
+        let err = mic_err_msg.unwrap_or_else(|| "Windows microphone access is blocked. Please check your Windows Privacy settings.".to_string());
+        warn!("❌ {}", err);
+        let _ = app.emit("transcription-error", serde_json::json!({
+            "error": err.clone(),
+            "userMessage": err.clone(),
+            "actionable": true
+        }));
+        let _ = super::permissions::open_microphone_settings();
+        return Err(err);
+    }
+
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
@@ -227,7 +241,14 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Set up error callback
     let app_for_error = app.clone();
     manager.set_error_callback(move |error| {
-        let _ = app_for_error.emit("recording-error", error.user_message());
+        let msg = error.user_message();
+        let _ = app_for_error.emit("recording-error", msg);
+        if matches!(error, super::recording_state::AudioError::PermissionDenied) {
+            let _ = app_for_error.emit("mic-status", serde_json::json!({
+                "status": "muted_or_blocked",
+                "message": "Microphone is muted or blocked by Windows"
+            }));
+        }
     });
 
     // Determine whether the current STT provider is a streaming provider (like Deepgram)
@@ -344,6 +365,20 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         return Err("Recording already in progress".to_string());
     }
 
+    // Validate Windows microphone privacy permissions before starting recording
+    let (mic_allowed, mic_err_msg) = super::permissions::check_microphone_permission();
+    if !mic_allowed {
+        let err = mic_err_msg.unwrap_or_else(|| "Windows microphone access is blocked. Please check your Windows Privacy settings.".to_string());
+        warn!("❌ {}", err);
+        let _ = app.emit("transcription-error", serde_json::json!({
+            "error": err.clone(),
+            "userMessage": err.clone(),
+            "actionable": true
+        }));
+        let _ = super::permissions::open_microphone_settings();
+        return Err(err);
+    }
+
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
@@ -360,21 +395,55 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     }
     info!("✅ Transcription model validation passed");
 
-    // Parse devices
-    let mic_device = if let Some(ref name) = mic_device_name {
-        Some(Arc::new(parse_audio_device(name).map_err(|e| {
-            format!("Invalid microphone device '{}': {}", name, e)
-        })?))
-    } else {
-        None
+    // Parse devices with robust fallback to system defaults
+    let mic_device = match mic_device_name {
+        Some(ref name) if !name.trim().is_empty() && name != "default" => {
+            match parse_audio_device(name) {
+                Ok(device) => {
+                    info!("✅ Using specified microphone: '{}'", device.name);
+                    Some(Arc::new(device))
+                }
+                Err(e) => {
+                    warn!("⚠️ Failed to parse specified microphone '{}': {}. Falling back to default.", name, e);
+                    match default_input_device() {
+                        Ok(dev) => Some(Arc::new(dev)),
+                        Err(_) => None,
+                    }
+                }
+            }
+        }
+        _ => {
+            info!("🎤 No specific microphone requested (or 'default'). Resolving default input device...");
+            match default_input_device() {
+                Ok(dev) => {
+                    info!("✅ Fallback to default microphone: '{}'", dev.name);
+                    Some(Arc::new(dev))
+                }
+                Err(e) => {
+                    warn!("⚠️ No default microphone found: {}", e);
+                    None
+                }
+            }
+        }
     };
 
-    let system_device = if let Some(ref name) = system_device_name {
-        Some(Arc::new(parse_audio_device(name).map_err(|e| {
-            format!("Invalid system device '{}': {}", name, e)
-        })?))
-    } else {
-        None
+    let system_device = match system_device_name {
+        Some(ref name) if !name.trim().is_empty() && name != "default" => {
+            match parse_audio_device(name) {
+                Ok(device) => {
+                    info!("✅ Using specified system device: '{}'", device.name);
+                    Some(Arc::new(device))
+                }
+                Err(e) => {
+                    warn!("⚠️ Failed to parse specified system device '{}': {}. Falling back to default.", name, e);
+                    default_output_device().ok().map(Arc::new)
+                }
+            }
+        }
+        _ => {
+            info!("🔊 No specific system audio requested (or 'default'). Resolving default output device...");
+            default_output_device().ok().map(Arc::new)
+        }
     };
 
     // Async-first approach for custom devices - no more blocking operations!
@@ -408,7 +477,14 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // Set up error callback
     let app_for_error = app.clone();
     manager.set_error_callback(move |error| {
-        let _ = app_for_error.emit("recording-error", error.user_message());
+        let msg = error.user_message();
+        let _ = app_for_error.emit("recording-error", msg);
+        if matches!(error, super::recording_state::AudioError::PermissionDenied) {
+            let _ = app_for_error.emit("mic-status", serde_json::json!({
+                "status": "muted_or_blocked",
+                "message": "Microphone is muted or blocked by Windows"
+            }));
+        }
     });
 
     // Determine whether the current STT provider is a streaming provider (like Deepgram)

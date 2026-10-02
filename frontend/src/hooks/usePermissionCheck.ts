@@ -25,7 +25,16 @@ export function usePermissionCheck() {
 
       // Check for microphone devices (Input)
       const inputDevices = devices.filter(d => d.device_type === 'Input');
-      const hasMicrophone = inputDevices.length > 0;
+      
+      // Check Windows / system-level microphone privacy permission
+      let micAllowed = true;
+      try {
+        micAllowed = await invoke<boolean>('check_microphone_permission_command');
+      } catch (err) {
+        console.warn('Microphone permission check failed:', err);
+      }
+
+      const hasMicrophone = inputDevices.length > 0 && micAllowed;
 
       // Check for system audio devices (Output)
       // On macOS, we need ScreenCaptureKit devices for system audio
@@ -35,6 +44,7 @@ export function usePermissionCheck() {
       console.log('Permission check:', {
         hasMicrophone,
         hasSystemAudio,
+        micAllowed,
         inputDevices: inputDevices.length,
         outputDevices: outputDevices.length
       });

@@ -3,7 +3,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { Play, Pause, Square, Mic, AlertCircle, X, Video, VideoOff } from 'lucide-react';
+import { Play, Pause, Square, Mic, MicOff, AlertCircle, X, Video, VideoOff } from 'lucide-react';
 import { ProcessRequest, SummaryResponse } from '@/types/summary';
 import { listen } from '@tauri-apps/api/event';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -59,12 +59,14 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   const [transcriptionErrors, setTranscriptionErrors] = useState(0);
   const [isValidatingModel, setIsValidatingModel] = useState(false);
   const [speechDetected, setSpeechDetected] = useState(false);
+  const [micMutedOrBlocked, setMicMutedOrBlocked] = useState(false);
   const [deviceError, setDeviceError] = useState<{ title: string, message: string } | null>(null);
   const [sttStatus, setSttStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
 
   useEffect(() => {
     if (!isRecording) {
       setSttStatus('idle');
+      setMicMutedOrBlocked(false);
     }
   }, [isRecording]);
 
@@ -102,6 +104,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     setShowPlayback(false);
     setTranscript(''); // Clear any previous transcript
     setSpeechDetected(false); // Reset speech detection on new recording
+    setMicMutedOrBlocked(false); // Reset microphone silence/block state on new recording
 
     // If video recording is enabled, launch screen capture immediately on user gesture
     const isVideoActive =
@@ -335,6 +338,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         const speechDetectedUnsubscribe = await listen('speech-detected', (event) => {
           console.log('speech-detected event received:', event);
           setSpeechDetected(true);
+          setMicMutedOrBlocked(false);
         });
 
         // STT channel status listener (connecting -> connected / error)
@@ -345,11 +349,29 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           }
         });
 
+        // Microphone status listener (detects if microphone is muted, blocked by Windows, or zero audio)
+        const micStatusUnsubscribe = await listen<{ status: string; message: string }>('mic-status', (event) => {
+          console.warn('mic-status event received:', event.payload);
+          if (event.payload?.status === 'muted_or_blocked') {
+            setMicMutedOrBlocked(true);
+          }
+        });
+
+        // Also catch if recording-error reports microphone blocked/denied
+        const recordingErrorUnsubscribe = await listen<string>('recording-error', (event) => {
+          const msg = typeof event.payload === 'string' ? event.payload : JSON.stringify(event.payload);
+          if (msg.toLowerCase().includes('muted or blocked') || msg.toLowerCase().includes('permission')) {
+            setMicMutedOrBlocked(true);
+          }
+        });
+
         unsubscribes = [
           transcriptErrorUnsubscribe,
           transcriptionErrorUnsubscribe,
           speechDetectedUnsubscribe,
-          sttStatusUnsubscribe
+          sttStatusUnsubscribe,
+          micStatusUnsubscribe,
+          recordingErrorUnsubscribe,
         ];
         console.log('Recording event listeners set up successfully');
       } catch (error) {
@@ -528,19 +550,46 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                     </>
                   )}
 
-                  <div className="flex items-center space-x-1 mx-4">
-                    {barHeights.map((height, index) => (
-                      <div
-                        key={index}
-                        className={`w-1 rounded-full transition-all duration-200 ${isPaused ? 'bg-orange-500' : 'bg-red-500'
-                          }`}
-                        style={{
-                          height: isRecording && !isPaused ? height : '4px',
-                          opacity: isPaused ? 0.6 : 1,
-                        }}
-                      />
-                    ))}
-                  </div>
+                  {isRecording && (
+                    micMutedOrBlocked ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                await invoke('open_microphone_settings_command');
+                              } catch (e) {
+                                console.error('Failed to open microphone settings:', e);
+                              }
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1 mx-2 rounded-full text-xs font-semibold cursor-pointer transition-all duration-200 border bg-amber-50 border-amber-300 text-amber-800 hover:bg-amber-100"
+                          >
+                            <MicOff className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                            <span>Microphone is muted or blocked by Windows</span>
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Windows is passing 0 audio. Click to open Windows Microphone Privacy Settings.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <div className="flex items-center space-x-1 mx-4">
+                        {barHeights.map((height, index) => (
+                          <div
+                            key={index}
+                            className={`w-1 rounded-full transition-all duration-200 ${
+                              isPaused ? 'bg-orange-500' : 'bg-red-500'
+                            }`}
+                            style={{
+                              height: !isPaused ? height : '4px',
+                              opacity: isPaused ? 0.6 : 1,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )
+                  )}
 
                   {/* STT Status Indicator */}
                   {(isRecording || isStarting) && (

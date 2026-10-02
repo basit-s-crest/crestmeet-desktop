@@ -14,13 +14,29 @@ interface AuthResponse {
   error: string | null;
 }
 
+interface EmailCheckResponse {
+  exists: boolean;
+  error: string | null;
+}
+
+interface OtpResponse {
+  success: boolean;
+  message: string;
+  error: string | null;
+}
+
 interface AuthContextType {
   user: AuthUser | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (email: string, password: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
+  checkEmailExists: (email: string) => Promise<{ exists: boolean; error?: string }>;
+  resetPassword: (email: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  requestResetOtp: (email: string) => Promise<{ success: boolean; message?: string; error?: string }>;
+  verifyAndResetPassword: (email: string, otp: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
 }
+
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -144,6 +160,76 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   };
 
+  const checkEmailExists = async (email: string): Promise<{ exists: boolean; error?: string }> => {
+    try {
+      const res = await invoke<EmailCheckResponse>('auth_check_email_exists', {
+        email: email.trim(),
+      });
+      if (res.error) {
+        return { exists: false, error: res.error };
+      }
+      return { exists: res.exists };
+    } catch (err: any) {
+      console.error('[Auth] Check email error:', err);
+      return { exists: false, error: err?.toString() || 'Failed to verify email' };
+    }
+  };
+
+  const resetPassword = async (email: string, newPassword: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await invoke<AuthResponse>('auth_reset_password', {
+        email: email.trim(),
+        newPassword,
+      });
+
+      if (!res.success) {
+        return { success: false, error: res.error || 'Failed to reset password' };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('[Auth] Reset password error:', err);
+      return { success: false, error: err?.toString() || 'Failed to reset password' };
+    }
+  };
+
+  const requestResetOtp = async (email: string): Promise<{ success: boolean; message?: string; error?: string }> => {
+    try {
+      const res = await invoke<OtpResponse>('auth_request_reset_otp', {
+        email: email.trim(),
+      });
+      if (!res.success) {
+        return { success: false, error: res.error || 'Failed to send verification code' };
+      }
+      return {
+        success: true,
+        message: res.message,
+      };
+    } catch (err: any) {
+      console.error('[Auth] Request reset OTP error:', err);
+      return { success: false, error: err?.toString() || 'Failed to send verification code' };
+    }
+  };
+
+  const verifyAndResetPassword = async (email: string, otp: string, newPassword: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await invoke<AuthResponse>('auth_verify_and_reset_password', {
+        email: email.trim(),
+        otp: otp.trim(),
+        newPassword,
+      });
+
+      if (!res.success) {
+        return { success: false, error: res.error || 'Failed to reset password' };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('[Auth] Verify and reset password error:', err);
+      return { success: false, error: err?.toString() || 'Failed to reset password' };
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -152,6 +238,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signIn,
         signUp,
         signOut,
+        checkEmailExists,
+        resetPassword,
+        requestResetOtp,
+        verifyAndResetPassword,
       }}
     >
       {children}

@@ -76,7 +76,7 @@ impl AudioError {
             AudioError::ChannelClosed => "Audio channel was closed unexpectedly",
             AudioError::InitializationFailed => "Failed to initialize audio system",
             AudioError::ConfigurationError => "Audio configuration error",
-            AudioError::PermissionDenied => "Microphone permission denied",
+            AudioError::PermissionDenied => "Microphone is muted or blocked by Windows",
             AudioError::BufferOverflow => "Audio buffer overflow",
             AudioError::SampleRateUnsupported => "Audio sample rate not supported",
         }

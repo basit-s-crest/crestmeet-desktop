@@ -144,6 +144,81 @@ pub async fn trigger_system_audio_permission_command() -> Result<bool, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Check if Windows microphone privacy allows desktop apps
+pub fn check_microphone_permission() -> (bool, Option<String>) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+
+        // Check desktop apps permission
+        let desktop_output = Command::new("reg")
+            .args(&[
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged",
+                "/v",
+                "Value",
+            ])
+            .output();
+
+        if let Ok(output) = desktop_output {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if text.to_lowercase().contains("deny") {
+                return (
+                    false,
+                    Some("Windows is blocking desktop apps from accessing your microphone. Please open Windows Settings → Privacy & Security → Microphone, and turn ON 'Let desktop apps access your microphone'.".to_string())
+                );
+            }
+        }
+
+        // Check global microphone permission
+        let global_output = Command::new("reg")
+            .args(&[
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone",
+                "/v",
+                "Value",
+            ])
+            .output();
+
+        if let Ok(output) = global_output {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if text.to_lowercase().contains("deny") {
+                return (
+                    false,
+                    Some("Windows microphone access is turned off globally. Please open Windows Settings → Privacy & Security → Microphone, and turn ON 'Microphone access'.".to_string())
+                );
+            }
+        }
+    }
+
+    (true, None)
+}
+
+/// Open Windows Microphone Privacy settings
+pub fn open_microphone_settings() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(&["/c", "start", "ms-settings:privacy-microphone"])
+            .spawn()
+            .map_err(|e| format!("Failed to open Windows privacy settings: {}", e))?;
+    }
+    Ok(())
+}
+
+/// Tauri command to check microphone permission
+#[tauri::command]
+pub async fn check_microphone_permission_command() -> Result<bool, String> {
+    let (allowed, _) = check_microphone_permission();
+    Ok(allowed)
+}
+
+/// Tauri command to open microphone privacy settings
+#[tauri::command]
+pub async fn open_microphone_settings_command() -> Result<(), String> {
+    open_microphone_settings()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

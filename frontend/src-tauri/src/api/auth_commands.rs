@@ -1,5 +1,6 @@
 use crate::state::AppState;
 use log::{error, info, warn};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tauri::State;
@@ -17,6 +18,21 @@ pub struct AuthResponse {
     pub user: Option<AuthUser>,
     pub error: Option<String>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EmailCheckResponse {
+    pub exists: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OtpResponse {
+    pub success: bool,
+    pub message: String,
+    pub error: Option<String>,
+}
+
+
 
 #[tauri::command]
 pub async fn auth_signup(
@@ -283,11 +299,33 @@ pub async fn auth_login(
                         error: None,
                     })
                 }
-                _ => Ok(AuthResponse {
-                    success: false,
-                    user: None,
-                    error: Some("Invalid email or password".to_string()),
-                }),
+                _ => {
+                    let email_exists = sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM (
+                            SELECT id FROM app_users WHERE LOWER(email) = LOWER($1)
+                            UNION ALL
+                            SELECT id FROM auth.users WHERE LOWER(email) = LOWER($1)
+                        ) t"
+                    )
+                    .bind(&email)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or(0);
+
+                    if email_exists == 0 {
+                        Ok(AuthResponse {
+                            success: false,
+                            user: None,
+                            error: Some("No account found with this email. Please create an account first.".to_string()),
+                        })
+                    } else {
+                        Ok(AuthResponse {
+                            success: false,
+                            user: None,
+                            error: Some("Incorrect password. Please try again or reset your password.".to_string()),
+                        })
+                    }
+                }
             }
         }
         Err(e) => {
@@ -318,11 +356,29 @@ pub async fn auth_login(
                         error: None,
                     })
                 }
-                _ => Ok(AuthResponse {
-                    success: false,
-                    user: None,
-                    error: Some(format!("Login error: {}", e)),
-                }),
+                _ => {
+                    let email_exists = sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM app_users WHERE LOWER(email) = LOWER($1)"
+                    )
+                    .bind(&email)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or(0);
+
+                    if email_exists == 0 {
+                        Ok(AuthResponse {
+                            success: false,
+                            user: None,
+                            error: Some("No account found with this email. Please create an account first.".to_string()),
+                        })
+                    } else {
+                        Ok(AuthResponse {
+                            success: false,
+                            user: None,
+                            error: Some("Incorrect password. Please try again or reset your password.".to_string()),
+                        })
+                    }
+                }
             }
         }
     }
@@ -436,3 +492,561 @@ pub async fn get_active_user(
     let current = state.current_user_id.read().await;
     Ok(current.map(|u| u.to_string()))
 }
+
+#[tauri::command]
+pub async fn auth_check_email_exists(
+    state: State<'_, AppState>,
+    email: String,
+) -> Result<EmailCheckResponse, String> {
+    let email = email.trim().to_lowercase();
+    if email.is_empty() {
+        return Ok(EmailCheckResponse {
+            exists: false,
+            error: Some("Email address is required".to_string()),
+        });
+    }
+
+    let pool = state.db_manager.pool();
+
+    // 1. Check app_users table first
+    let app_res: Result<Option<(Uuid,)>, sqlx::Error> =
+        sqlx::query_as("SELECT id FROM app_users WHERE LOWER(email) = LOWER($1)")
+            .bind(&email)
+            .fetch_optional(pool)
+            .await;
+
+    if let Ok(Some(_)) = app_res {
+        info!("🔍 auth_check_email_exists: found email in app_users: {}", email);
+        return Ok(EmailCheckResponse {
+            exists: true,
+            error: None,
+        });
+    }
+
+    // 2. Check auth.users table
+    let auth_res: Result<Option<(Uuid,)>, sqlx::Error> =
+        sqlx::query_as("SELECT id FROM auth.users WHERE LOWER(email) = LOWER($1)")
+            .bind(&email)
+            .fetch_optional(pool)
+            .await;
+
+    match auth_res {
+        Ok(Some(_)) => {
+            info!("🔍 auth_check_email_exists: found email in auth.users: {}", email);
+            Ok(EmailCheckResponse {
+                exists: true,
+                error: None,
+            })
+        }
+        Ok(None) => {
+            info!("🔍 auth_check_email_exists: email not found: {}", email);
+            Ok(EmailCheckResponse {
+                exists: false,
+                error: None,
+            })
+        }
+        Err(e) => {
+            // If app_users check also was None or errored, return error details
+            error!("Database error checking email existence for {}: {}", email, e);
+            // If app_res was Ok(None), we can safely say it's not in app_users;
+            // but auth.users had an error, fallback to false
+            Ok(EmailCheckResponse {
+                exists: false,
+                error: Some(format!("Database error checking email: {}", e)),
+            })
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn auth_reset_password(
+    state: State<'_, AppState>,
+    email: String,
+    new_password: String,
+) -> Result<AuthResponse, String> {
+    let email = email.trim().to_lowercase();
+    if email.is_empty() {
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("Email address is required".to_string()),
+        });
+    }
+
+    if new_password.len() < 6 {
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("Password must be at least 6 characters long".to_string()),
+        });
+    }
+
+    let pool = state.db_manager.pool();
+
+    // Verify user exists before attempting reset
+    let check = auth_check_email_exists(state.clone(), email.clone()).await?;
+    if !check.exists {
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("No account found with this email address".to_string()),
+        });
+    }
+
+    // Update app_users table with newly crypt-hashed password
+    let app_update: Result<Option<(Uuid, String)>, sqlx::Error> = sqlx::query_as(
+        r#"
+        UPDATE app_users
+        SET password_hash = crypt($2, gen_salt('bf', 10)),
+            updated_at = NOW()
+        WHERE LOWER(email) = LOWER($1)
+        RETURNING id, email
+        "#
+    )
+    .bind(&email)
+    .bind(&new_password)
+    .fetch_optional(pool)
+    .await;
+
+    // Update auth.users table
+    let auth_update = sqlx::query(
+        r#"
+        UPDATE auth.users
+        SET encrypted_password = crypt($2, gen_salt('bf', 10)),
+            updated_at = NOW()
+        WHERE LOWER(email) = LOWER($1)
+        "#
+    )
+    .bind(&email)
+    .bind(&new_password)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = &auth_update {
+        warn!("Note: updating auth.users password encountered: {}", e);
+    }
+
+    match app_update {
+        Ok(Some((user_id, user_email))) => {
+            info!("🔑 Password reset successfully in app_users for: {}", user_email);
+            Ok(AuthResponse {
+                success: true,
+                user: Some(AuthUser {
+                    id: user_id.to_string(),
+                    email: user_email,
+                }),
+                error: None,
+            })
+        }
+        Ok(None) => {
+            // If app_users didn't have the record but auth.users succeeded, sync into app_users
+            if auth_update.is_ok() {
+                info!("🔑 Password reset in auth.users, ensuring synced into app_users for: {}", email);
+                let _ = sqlx::query(
+                    r#"
+                    INSERT INTO app_users (id, email, password_hash, created_at, updated_at)
+                    VALUES (gen_random_uuid(), $1, crypt($2, gen_salt('bf', 10)), NOW(), NOW())
+                    ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = NOW()
+                    "#
+                )
+                .bind(&email)
+                .bind(&new_password)
+                .execute(pool)
+                .await;
+
+                Ok(AuthResponse {
+                    success: true,
+                    user: None,
+                    error: None,
+                })
+            } else {
+                Ok(AuthResponse {
+                    success: false,
+                    user: None,
+                    error: Some("Unable to reset password for this email".to_string()),
+                })
+            }
+        }
+        Err(e) => {
+            error!("Database error during password reset: {}", e);
+            Ok(AuthResponse {
+                success: false,
+                user: None,
+                error: Some(format!("Database error during reset: {}", e)),
+            })
+        }
+    }
+}
+
+fn get_resend_api_key() -> Option<String> {
+    // 1. Process environment variable
+    if let Ok(k) = std::env::var("RESEND_API_KEY") {
+        let trimmed = k.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+
+    // 2. Read from .env files on disk (both relative to cwd and relative to src-tauri)
+    let candidates = [
+        std::path::PathBuf::from("frontend/.env"),
+        std::path::PathBuf::from(".env"),
+        std::path::PathBuf::from("../.env"),
+        std::path::PathBuf::from("../frontend/.env"),
+        std::path::PathBuf::from("../../frontend/.env"),
+    ];
+
+    for path in &candidates {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            for line in contents.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("RESEND_API_KEY=") {
+                    let key = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+                    if !key.is_empty() {
+                        return Some(key);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn get_resend_from_email() -> String {
+    if let Ok(f) = std::env::var("RESEND_FROM_EMAIL") {
+        let trimmed = f.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    let candidates = [
+        std::path::PathBuf::from("frontend/.env"),
+        std::path::PathBuf::from(".env"),
+        std::path::PathBuf::from("../.env"),
+        std::path::PathBuf::from("../frontend/.env"),
+    ];
+
+    for path in &candidates {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            for line in contents.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("RESEND_FROM_EMAIL=") {
+                    let from = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+                    if !from.is_empty() {
+                        return from;
+                    }
+                }
+            }
+        }
+    }
+
+    "CrestMeet <onboarding@resend.dev>".to_string()
+}
+
+async fn send_otp_email(email: &str, otp: &str) -> Result<(), String> {
+    let api_key = match get_resend_api_key() {
+        Some(k) => k,
+        None => {
+            let err = "RESEND_API_KEY not found in frontend/.env or environment".to_string();
+            error!("❌ {}", err);
+            return Err(err);
+        }
+    };
+
+    let from_email = get_resend_from_email();
+    info!("📧 [Password Reset OTP] Sending email to {} via Resend from {}", email, from_email);
+
+    let client = reqwest::Client::new();
+    let payload = serde_json::json!({
+        "from": from_email,
+        "to": [email],
+        "subject": format!("Your CrestMeet Password Reset Code: {}", otp),
+        "html": format!(
+            "<div style='font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff;'>\
+                <div style='margin-bottom: 20px; font-weight: bold; font-size: 18px; color: #111827;'>CrestMeet</div>\
+                <h2 style='color: #111827; font-size: 20px; font-weight: 600; margin-bottom: 8px;'>Reset Your Password</h2>\
+                <p style='color: #4b5563; font-size: 14px; line-height: 1.5;'>We received a request to reset the password for your CrestMeet account. Use the 6-digit verification code below:</p>\
+                <div style='background-color: #f3f4f6; border-radius: 8px; padding: 16px; text-align: center; margin: 24px 0;'>\
+                    <span style='font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #111827;'>{}</span>\
+                </div>\
+                <p style='color: #6b7280; font-size: 12px; line-height: 1.5;'>This verification code will expire in 10 minutes. If you did not request this password reset, please ignore this email.</p>\
+            </div>",
+            otp
+        )
+    });
+
+    match client.post("https://api.resend.com/emails")
+        .bearer_auth(api_key)
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            if status.is_success() {
+                info!("✅ Password reset OTP email successfully sent via Resend to {}: {}", email, body);
+                Ok(())
+            } else {
+                error!("❌ Resend API returned error (HTTP {}): {}", status, body);
+                Err(format!("Resend email delivery failed: {}", body))
+            }
+        }
+        Err(e) => {
+            error!("❌ Network error calling Resend API: {}", e);
+            Err(format!("Network error sending email: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn auth_request_reset_otp(
+    state: State<'_, AppState>,
+    email: String,
+) -> Result<OtpResponse, String> {
+    let email = email.trim().to_lowercase();
+    if email.is_empty() {
+        return Ok(OtpResponse {
+            success: false,
+            message: String::new(),
+            error: Some("Email address is required".to_string()),
+        });
+    }
+
+    let pool = state.db_manager.pool();
+
+    // Check if email exists in either app_users or auth.users
+    let email_exists = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM (
+            SELECT id FROM app_users WHERE LOWER(email) = LOWER($1)
+            UNION ALL
+            SELECT id FROM auth.users WHERE LOWER(email) = LOWER($1)
+        ) t"
+    )
+    .bind(&email)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+
+    if email_exists == 0 {
+        return Ok(OtpResponse {
+            success: false,
+            message: String::new(),
+            error: Some("Email not found in our records. Please sign up first.".to_string()),
+        });
+    }
+
+    // Generate secure 6-digit OTP code
+    let otp: String = format!("{:06}", rand::thread_rng().gen_range(100_000..=999_999));
+
+    // Invalidate previous unused OTPs for this email
+    let _ = sqlx::query(
+        "UPDATE password_reset_otps SET used = true WHERE LOWER(email) = LOWER($1) AND used = false"
+    )
+    .bind(&email)
+    .execute(pool)
+    .await;
+
+    // Store new OTP with 10-minute expiry
+    let insert_res = sqlx::query(
+        r#"
+        INSERT INTO password_reset_otps (email, otp_code, expires_at, used, created_at)
+        VALUES ($1, $2, NOW() + INTERVAL '10 minutes', false, NOW())
+        "#
+    )
+    .bind(&email)
+    .bind(&otp)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = insert_res {
+        error!("Failed to store password reset OTP: {}", e);
+        return Ok(OtpResponse {
+            success: false,
+            message: String::new(),
+            error: Some(format!("Database error: {}", e)),
+        });
+    }
+
+    // Dispatch email to the user's inbox
+    if let Err(e) = send_otp_email(&email, &otp).await {
+        return Ok(OtpResponse {
+            success: false,
+            message: String::new(),
+            error: Some(format!("Failed to send email: {}", e)),
+        });
+    }
+
+    Ok(OtpResponse {
+        success: true,
+        message: format!("A 6-digit verification code has been sent to {}", email),
+        error: None,
+    })
+}
+
+
+#[tauri::command]
+pub async fn auth_verify_and_reset_password(
+    state: State<'_, AppState>,
+    email: String,
+    otp: String,
+    new_password: String,
+) -> Result<AuthResponse, String> {
+    let email = email.trim().to_lowercase();
+    let otp = otp.trim();
+
+    if email.is_empty() {
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("Email address is required".to_string()),
+        });
+    }
+
+    if otp.is_empty() {
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("Please enter the 6-digit verification code sent to your email".to_string()),
+        });
+    }
+
+    if new_password.len() < 6 {
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("Password must be at least 6 characters long".to_string()),
+        });
+    }
+
+    let pool = state.db_manager.pool();
+
+    // Verify valid, unexpired, unused OTP
+    let otp_record: Result<Option<(Uuid,)>, sqlx::Error> = sqlx::query_as(
+        r#"
+        SELECT id FROM password_reset_otps
+        WHERE LOWER(email) = LOWER($1)
+          AND otp_code = $2
+          AND used = false
+          AND expires_at > NOW()
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#
+    )
+    .bind(&email)
+    .bind(otp)
+    .fetch_optional(pool)
+    .await;
+
+    let otp_id = match otp_record {
+        Ok(Some((id,))) => id,
+        Ok(None) => {
+            return Ok(AuthResponse {
+                success: false,
+                user: None,
+                error: Some("Invalid or expired verification code. Please request a new one.".to_string()),
+            });
+        }
+        Err(e) => {
+            error!("Database error checking OTP: {}", e);
+            return Ok(AuthResponse {
+                success: false,
+                user: None,
+                error: Some(format!("Database error: {}", e)),
+            });
+        }
+    };
+
+    // Mark OTP as used immediately to prevent replay
+    let _ = sqlx::query("UPDATE password_reset_otps SET used = true WHERE id = $1")
+        .bind(otp_id)
+        .execute(pool)
+        .await;
+
+    // Update app_users
+    let app_update: Result<Option<(Uuid, String)>, sqlx::Error> = sqlx::query_as(
+        r#"
+        UPDATE app_users
+        SET password_hash = crypt($2, gen_salt('bf', 10)),
+            updated_at = NOW()
+        WHERE LOWER(email) = LOWER($1)
+        RETURNING id, email
+        "#
+    )
+    .bind(&email)
+    .bind(&new_password)
+    .fetch_optional(pool)
+    .await;
+
+    // Update auth.users
+    let auth_update = sqlx::query(
+        r#"
+        UPDATE auth.users
+        SET encrypted_password = crypt($2, gen_salt('bf', 10)),
+            updated_at = NOW()
+        WHERE LOWER(email) = LOWER($1)
+        "#
+    )
+    .bind(&email)
+    .bind(&new_password)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = &auth_update {
+        warn!("Note: updating auth.users password encountered: {}", e);
+    }
+
+    match app_update {
+        Ok(Some((user_id, user_email))) => {
+            info!("🔑 Password reset successfully via OTP for: {}", user_email);
+            Ok(AuthResponse {
+                success: true,
+                user: Some(AuthUser {
+                    id: user_id.to_string(),
+                    email: user_email,
+                }),
+                error: None,
+            })
+        }
+        Ok(None) => {
+            if auth_update.is_ok() {
+                info!("🔑 Password reset in auth.users via OTP, ensuring synced into app_users for: {}", email);
+                let _ = sqlx::query(
+                    r#"
+                    INSERT INTO app_users (id, email, password_hash, created_at, updated_at)
+                    VALUES (gen_random_uuid(), $1, crypt($2, gen_salt('bf', 10)), NOW(), NOW())
+                    ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, updated_at = NOW()
+                    "#
+                )
+                .bind(&email)
+                .bind(&new_password)
+                .execute(pool)
+                .await;
+
+                Ok(AuthResponse {
+                    success: true,
+                    user: None,
+                    error: None,
+                })
+            } else {
+                Ok(AuthResponse {
+                    success: false,
+                    user: None,
+                    error: Some("Unable to update password for this account".to_string()),
+                })
+            }
+        }
+        Err(e) => {
+            error!("Database error updating password: {}", e);
+            Ok(AuthResponse {
+                success: false,
+                user: None,
+                error: Some(format!("Database error during reset: {}", e)),
+            })
+        }
+    }
+}
+
+

@@ -93,11 +93,10 @@ const Sidebar: React.FC = () => {
             <TooltipTrigger asChild>
               <button
                 onClick={handleRecordingToggle}
-                disabled={isRecording}
                 className={`p-2.5 rounded-xl transition-all duration-150 shadow-sm ${
                   isRecording
-                    ? 'bg-red-500 text-white animate-pulse cursor-not-allowed'
-                    : 'bg-red-500 hover:bg-red-600 text-white'
+                    ? 'bg-red-500 text-white hover:bg-red-600'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                 }`}
                 aria-label="Record"
               >
@@ -109,7 +108,7 @@ const Sidebar: React.FC = () => {
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
-              <p>{isRecording ? 'Recording in progress...' : 'Start Recording'}</p>
+              <p>{isRecording ? 'Recording in progress (Go to Home)' : 'Record'}</p>
             </TooltipContent>
           </Tooltip>
 
@@ -312,11 +311,10 @@ const Sidebar: React.FC = () => {
               {/* Record Action Button */}
               <button
                 onClick={handleRecordingToggle}
-                disabled={isRecording}
-                className={`w-full flex items-center justify-center gap-2 px-3.5 py-2.5 text-sm font-medium text-white rounded-xl transition-all shadow-sm ${
+                className={`w-full flex items-center justify-center gap-2 px-3.5 py-2.5 text-sm font-medium rounded-xl transition-all shadow-sm ${
                   isRecording
-                    ? 'bg-red-500 animate-pulse cursor-not-allowed'
-                    : 'bg-red-500 hover:bg-red-600 active:scale-[0.98]'
+                    ? 'bg-red-500 text-white hover:bg-red-600'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 active:scale-[0.98]'
                 }`}
               >
                 {isRecording ? (

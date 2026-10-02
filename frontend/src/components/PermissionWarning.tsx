@@ -32,12 +32,14 @@ export function PermissionWarning({
   const isMacOS = navigator.userAgent.includes('Mac');
 
   const openMicrophoneSettings = async () => {
-    if (isMacOS) {
-      try {
+    try {
+      if (isMacOS) {
         await invoke('open_system_settings', { preferencePane: 'Privacy_Microphone' });
-      } catch (error) {
-        console.error('Failed to open microphone settings:', error);
+      } else {
+        await invoke('open_microphone_settings_command');
       }
+    } catch (error) {
+      console.error('Failed to open microphone settings:', error);
     }
   };
 
@@ -66,7 +68,7 @@ export function PermissionWarning({
           </AlertTitle>
           {/* Action Buttons */}
           <div className="mt-4 flex flex-wrap gap-2">
-            {isMacOS && !hasMicrophone && (
+            {!hasMicrophone && (
               <button
                 onClick={openMicrophoneSettings}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-md transition-colors"

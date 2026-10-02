@@ -1,11 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { RefreshCw, Mic, Speaker } from 'lucide-react';
+import {
+  RefreshCw,
+  Mic,
+  Speaker,
+  Square,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+} from 'lucide-react';
 import { AudioLevelMeter, CompactAudioLevelMeter } from './AudioLevelMeter';
 import { AudioBackendSelector } from './AudioBackendSelector';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
+import { Button } from '@/components/ui/button';
 import Analytics from '@/lib/analytics';
 
 export interface AudioDevice {
@@ -46,6 +55,18 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [showLevels, setShowLevels] = useState(false);
 
+  // Live mic testing state
+  const [isTestingMic, setIsTestingMic] = useState(false);
+  const [micVolume, setMicVolume] = useState(0);
+  const [hasVoiceDetected, setHasVoiceDetected] = useState(false);
+  const [micSilenceSeconds, setMicSilenceSeconds] = useState(0);
+  const [micTestError, setMicTestError] = useState<string | null>(null);
+
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const silenceIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
   // Filter devices by type
   const inputDevices = devices.filter(device => device.device_type === 'Input');
   const outputDevices = devices.filter(device => device.device_type === 'Output');
@@ -70,41 +91,6 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
   useEffect(() => {
     fetchDevices();
   }, []);
-
-  // Set up audio level event listener
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-
-    const setupAudioLevelListener = async () => {
-      try {
-        unlisten = await listen<AudioLevelUpdate>('audio-levels', (event) => {
-          const levelUpdate = event.payload;
-          const newLevels = new Map<string, AudioLevelData>();
-
-          levelUpdate.levels.forEach(level => {
-            newLevels.set(level.device_name, level);
-          });
-
-          setAudioLevels(newLevels);
-        });
-      } catch (err) {
-        console.error('Failed to setup audio level listener:', err);
-      }
-    };
-
-    setupAudioLevelListener();
-
-    // Cleanup function
-    return () => {
-      if (unlisten) {
-        unlisten();
-      }
-      // Stop monitoring when component unmounts
-      if (isMonitoring) {
-        stopAudioLevelMonitoring();
-      }
-    };
-  }, [isMonitoring]);
 
   // Handle device refresh
   const handleRefresh = async () => {
@@ -170,46 +156,92 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
     }).catch(err => console.error('Failed to track system audio selection:', err));
   };
 
-  // Start audio level monitoring
-  const startAudioLevelMonitoring = async () => {
+  // --- Real Microphone Testing via Web Audio API ---
+  const startMicTest = async () => {
     try {
-      // Only monitor input devices for now (microphones)
-      const deviceNames = inputDevices.map(device => device.name);
-      if (deviceNames.length === 0) {
-        setError('No microphone devices found to monitor');
-        return;
-      }
+      setMicTestError(null);
+      setHasVoiceDetected(false);
+      setMicSilenceSeconds(0);
+      setIsTestingMic(true);
 
-      await invoke('start_audio_level_monitoring', { deviceNames });
-      setIsMonitoring(true);
-      setShowLevels(true);
-      console.log('Started audio level monitoring for input devices:', deviceNames);
-    } catch (err) {
-      console.error('Failed to start audio level monitoring:', err);
-      setError('Failed to start audio level monitoring');
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false,
+      });
+      mediaStreamRef.current = stream;
+
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      audioContextRef.current = audioCtx;
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.4;
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const checkAudio = () => {
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        // Normalize between 0 and 1 with scaling
+        const normalized = Math.min(1, Math.max(0, avg / 110));
+        setMicVolume(normalized);
+
+        if (normalized > 0.05) {
+          setHasVoiceDetected(true);
+        }
+
+        animationFrameRef.current = requestAnimationFrame(checkAudio);
+      };
+
+      checkAudio();
+
+      silenceIntervalRef.current = setInterval(() => {
+        setMicSilenceSeconds((prev) => prev + 1);
+      }, 1000);
+
+      Analytics.trackButtonClick('start_mic_test', 'device_selection');
+    } catch (err: any) {
+      console.error('Failed to start mic test:', err);
+      setIsTestingMic(false);
+      setMicTestError(err.message || 'Microphone access denied or not available');
     }
   };
 
-  // Stop audio level monitoring
-  const stopAudioLevelMonitoring = async () => {
-    try {
-      await invoke('stop_audio_level_monitoring');
-      setIsMonitoring(false);
-      setAudioLevels(new Map());
-      console.log('Stopped audio level monitoring');
-    } catch (err) {
-      console.error('Failed to stop audio level monitoring:', err);
+  const stopMicTest = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
+    if (silenceIntervalRef.current) {
+      clearInterval(silenceIntervalRef.current);
+      silenceIntervalRef.current = null;
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    setIsTestingMic(false);
+    setMicVolume(0);
   };
 
-  // Toggle audio level monitoring
-  const toggleAudioLevelMonitoring = async () => {
-    if (isMonitoring) {
-      await stopAudioLevelMonitoring();
-    } else {
-      await startAudioLevelMonitoring();
-    }
-  };
+  useEffect(() => {
+    return () => {
+      stopMicTest();
+    };
+  }, []);
+
 
   if (loading) {
     return (
@@ -224,54 +256,72 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium text-gray-900">Audio Devices</h4>
+        <div>
+          <h4 className="text-sm font-semibold text-gray-900">Audio Devices</h4>
+          <p className="text-xs text-gray-500">Configure input and output channels for meetings.</p>
+        </div>
         <div className="flex items-center space-x-2">
-          {/* TODO: Monitoring */}
-          {/* <button */}
-          {/*   onClick={toggleAudioLevelMonitoring} */}
-          {/*   disabled={disabled || inputDevices.length === 0} */}
-          {/*   className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${ */}
-          {/*     isMonitoring */}
-          {/*       ? 'bg-red-100 text-red-700 hover:bg-red-200' */}
-          {/*       : 'bg-green-100 text-green-700 hover:bg-green-200' */}
-          {/*   } disabled:pointer-events-none disabled:opacity-50`} */}
-          {/*   title={inputDevices.length === 0 ? 'No microphones available to test' : ''} */}
-          {/* > */}
-          {/*   {isMonitoring ? 'Stop Test' : 'Test Mic'} */}
-          {/* </button> */}
           <button
             onClick={handleRefresh}
             disabled={refreshing || disabled}
-            className="h-8 w-8 p-0 inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-gray-100 disabled:pointer-events-none disabled:opacity-50"
+            title="Refresh audio device list"
+            className="h-8 w-8 p-0 inline-flex items-center justify-center rounded-lg text-sm font-medium transition-colors border border-gray-200 bg-white hover:bg-gray-100 disabled:pointer-events-none disabled:opacity-50 shadow-2xs"
           >
-            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 text-gray-600 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md">
+        <div className="p-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
           {error}
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         {/* Microphone Selection */}
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Mic className="h-4 w-4 text-gray-600" />
-            <Label htmlFor="mic-selection" className="text-sm font-medium text-gray-700">
-              Microphone
-            </Label>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Mic className="h-4 w-4 text-gray-600" />
+              <Label htmlFor="mic-selection" className="text-sm font-medium text-gray-700">
+                Microphone
+              </Label>
+            </div>
+            <Button
+              type="button"
+              onClick={isTestingMic ? stopMicTest : startMicTest}
+              disabled={disabled || inputDevices.length === 0}
+              size="sm"
+              variant={isTestingMic ? "destructive" : "outline"}
+              className={`h-7 px-3 text-xs font-medium flex items-center gap-1.5 shadow-2xs transition-all ${
+                isTestingMic
+                  ? 'bg-red-500 hover:bg-red-600 text-white'
+                  : 'border-emerald-300 bg-emerald-50/70 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800'
+              }`}
+            >
+              {isTestingMic ? (
+                <>
+                  <Square className="w-3 h-3 fill-current" />
+                  <span>Stop Test</span>
+                </>
+              ) : (
+                <>
+                  <Mic className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Test Mic</span>
+                </>
+              )}
+            </Button>
           </div>
+
           <Select
             value={selectedDevices.micDevice || 'default'}
             onValueChange={handleMicDeviceChange}
             disabled={disabled}
           >
-            <SelectTrigger id="mic-selection" className="w-full">
+            <SelectTrigger id="mic-selection" className="w-full bg-white">
               <SelectValue placeholder="Select Microphone" />
             </SelectTrigger>
             <SelectContent>
@@ -290,38 +340,73 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             <p className="text-xs text-gray-500">No microphone devices found</p>
           )}
 
-          {/* Audio Level Meters for Input Devices */}
-          {showLevels && inputDevices.length > 0 && (
-            <div className="space-y-2 pt-2 border-t border-gray-100">
-              <p className="text-xs text-gray-600 font-medium">Microphone Levels:</p>
-              {inputDevices.map((device) => {
-                const levelData = audioLevels.get(device.name);
-                return (
-                  <div key={`level-${device.name}`} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-600 truncate max-w-[200px]">
-                        {device.name}
-                      </span>
-                      {levelData && (
-                        <CompactAudioLevelMeter
-                          rmsLevel={levelData.rms_level}
-                          peakLevel={levelData.peak_level}
-                          isActive={levelData.is_active}
-                        />
-                      )}
-                    </div>
-                    {levelData && (
-                      <AudioLevelMeter
-                        rmsLevel={levelData.rms_level}
-                        peakLevel={levelData.peak_level}
-                        isActive={levelData.is_active}
-                        deviceName={device.name}
-                        size="small"
-                      />
-                    )}
+          {/* Live Mic Test Card */}
+          {isTestingMic && (
+            <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/50 space-y-2.5 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-gray-800 flex items-center gap-2">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  Live Mic Audio Level
+                </span>
+                <span className="text-xs font-mono font-medium text-gray-700">
+                  {Math.round(micVolume * 100)}%
+                </span>
+              </div>
+
+              {/* Visual Volume Bar */}
+              <div className="w-full h-2.5 bg-gray-200/80 rounded-full overflow-hidden relative">
+                <div
+                  className={`h-full rounded-full transition-all duration-75 ${
+                    micVolume > 0.7 ? 'bg-red-500' : micVolume > 0.3 ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`}
+                  style={{ width: `${Math.round(micVolume * 100)}%` }}
+                />
+              </div>
+
+              {/* Status indicator message */}
+              <div>
+                {hasVoiceDetected ? (
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Voice detected! Your microphone is capturing audio clearly.</span>
                   </div>
-                );
-              })}
+                ) : micSilenceSeconds >= 4 ? (
+                  <div className="flex items-start justify-between gap-2 p-2.5 rounded-lg bg-amber-100/80 border border-amber-300 text-amber-900 text-xs">
+                    <div className="flex items-start gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-amber-700 mt-0.5 shrink-0" />
+                      <span>No audio signal received yet. The microphone may be muted or blocked by Windows.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await invoke('open_microphone_settings_command');
+                        } catch (e) {
+                          console.error(e);
+                        }
+                      }}
+                      className="text-[11px] underline font-semibold hover:text-amber-950 shrink-0 flex items-center gap-1 ml-2"
+                    >
+                      Windows Settings <ExternalLink className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 text-xs text-blue-700">
+                    <Mic className="w-3.5 h-3.5 text-blue-600 animate-pulse shrink-0" />
+                    <span>Speak into your microphone to test volume level...</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {micTestError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>Error testing microphone: {micTestError}</span>
             </div>
           )}
         </div>
@@ -340,7 +425,7 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
             onValueChange={handleSystemDeviceChange}
             disabled={disabled}
           >
-            <SelectTrigger id="system-selection" className="w-full">
+            <SelectTrigger id="system-selection" className="w-full bg-white">
               <SelectValue placeholder="Select System Audio" />
             </SelectTrigger>
             <SelectContent>
@@ -370,14 +455,11 @@ export function DeviceSelection({ selectedDevices, onDeviceChange, disabled = fa
       </div>
 
       {/* Info text */}
-      <div className="text-xs text-gray-500 space-y-1">
-        <p>• <strong>Microphone:</strong> Records your voice and ambient sound</p>
-        <p>• <strong>System Audio:</strong> Records computer audio (music, calls, etc.)</p>
-        {isMonitoring && (
-          <p>• <strong>Mic Levels:</strong> Green = good, Yellow = loud, Red = too loud</p>
-        )}
-        {!isMonitoring && inputDevices.length > 0 && (
-          <p>• <strong>Tip:</strong> Click "Test Mic" to check if your microphone is working</p>
+      <div className="text-xs text-gray-500 space-y-1 pt-1 border-t border-gray-100">
+        <p>• <strong>Microphone:</strong> Records your speech and voice during meetings.</p>
+        <p>• <strong>System Audio:</strong> Records meeting attendees (Teams, Google Meet, Zoom, browser calls).</p>
+        {!isTestingMic && (
+          <p>• <strong>Tip:</strong> Click "Test Mic" above to check if your microphone is capturing audio before starting calls.</p>
         )}
       </div>
     </div>

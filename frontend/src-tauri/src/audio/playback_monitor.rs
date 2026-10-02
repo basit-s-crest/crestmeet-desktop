@@ -92,21 +92,30 @@ async fn get_windows_output() -> Result<AudioOutputInfo> {
         .ok()
         .map(|config| config.sample_rate().0);
 
-    // Windows Bluetooth detection
+    // Windows Bluetooth & Device Type detection
     let name_lower = device_name.to_lowercase();
     let is_bluetooth = name_lower.contains("bluetooth")
         || name_lower.contains("wireless")
         || name_lower.contains("bt ")
-        || name_lower.contains("airpods")
+        || name_lower.contains("airpod")
         || name_lower.contains("wh-")
+        || name_lower.contains("buds")
         || name_lower.contains("headset");
 
-    let device_type = if name_lower.contains("speaker") {
+    let device_type = if name_lower.contains("headphone")
+        || name_lower.contains("headset")
+        || name_lower.contains("earphone")
+        || name_lower.contains("airpod")
+        || name_lower.contains("buds")
+        || name_lower.contains("iem")
+    {
+        "Headphones".to_string()
+    } else if name_lower.contains("speaker") || name_lower.contains("realtek") || name_lower.contains("high definition") {
         "Speaker".to_string()
-    } else if name_lower.contains("headphone") || name_lower.contains("headset") {
+    } else if is_bluetooth {
         "Headphones".to_string()
     } else {
-        "Unknown".to_string()
+        "Speaker".to_string()
     };
 
     Ok(AudioOutputInfo {

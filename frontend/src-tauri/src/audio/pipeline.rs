@@ -574,8 +574,25 @@ impl AudioCapture {
 
         // RAW AUDIO: No gain applied here - will be applied AFTER mixing
         // This prevents amplifying system audio bleed-through in the microphone
+        // DIAGNOSTIC: Monitor microphone audio energy to catch Windows Privacy or physical mute blocks
+        if matches!(self.device_type, DeviceType::Microphone) && (chunk_id == 50 || chunk_id == 150) {
+            let raw_rms = if !mono_data.is_empty() {
+                (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt()
+            } else {
+                0.0
+            };
+            let raw_peak = mono_data.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
 
-        // DIAGNOSTIC: Log audio levels for debugging (especially mic issues)
+            if raw_rms == 0.0 && raw_peak == 0.0 {
+                warn!("⚠️ Microphone producing ZERO audio (RMS=0.0, Peak=0.0) at chunk {}! Windows Privacy or physical mute is likely blocking microphone access.", chunk_id);
+                if chunk_id == 50 {
+                    self.state.report_error(AudioError::PermissionDenied);
+                }
+            } else {
+                info!("🎙️ Microphone audio active at chunk {}: RMS={:.5}, Peak={:.5}", chunk_id, raw_rms, raw_peak);
+            }
+        }
+
         // if chunk_id % 100 == 0 && !mono_data.is_empty() {
         //     let raw_rms = (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt();
         //     let raw_peak = mono_data.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
