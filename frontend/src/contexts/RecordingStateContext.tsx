@@ -37,8 +37,9 @@ interface RecordingState {
 }
 
 interface RecordingStateContextType extends RecordingState {
-  // NEW: Setters for status management
+  // Setters for status & recording management
   setStatus: (status: RecordingStatus, message?: string) => void;
+  setIsRecording: (isRecording: boolean) => void;
 
   // Computed helpers (derived from status)
   isStopping: boolean;
@@ -63,69 +64,124 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
     isActive: false,
     recordingDuration: null,
     activeDuration: null,
-    status: RecordingStatus.IDLE,  // NEW: Initialize with IDLE status
-    statusMessage: undefined,       // NEW: No message initially
+    status: RecordingStatus.IDLE,
+    statusMessage: undefined,
   });
 
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // NEW: Status setter with logging
-  const setStatus = useCallback((status: RecordingStatus, message?: string) => {
-    console.log(`[RecordingState] Status: ${state.status} → ${status}`, message || '');
+  /**
+   * Stop polling backend state (called when recording stops)
+   */
+  const stopPolling = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      console.log('[RecordingStateContext] Stopping state polling');
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+  }, []);
 
+  /**
+   * Direct setter for isRecording
+   */
+  const setIsRecording = useCallback((isRecording: boolean) => {
     setState(prev => ({
       ...prev,
-      status,
-      statusMessage: message,
+      isRecording,
+      isActive: isRecording && !prev.isPaused,
+      ...(!isRecording ? { isPaused: false, recordingDuration: null, activeDuration: null } : {})
     }));
-  }, [state.status, state.isRecording, state.isPaused]);
+    if (!isRecording) {
+      stopPolling();
+    }
+  }, [stopPolling]);
+
+  /**
+   * Status setter with logging and automatic state cleanup
+   */
+  const setStatus = useCallback((status: RecordingStatus, message?: string) => {
+    console.log(`[RecordingState] Status transition to: ${status}`, message || '');
+
+    setState(prev => {
+      const shouldClearRecording =
+        status === RecordingStatus.IDLE ||
+        status === RecordingStatus.ERROR ||
+        status === RecordingStatus.COMPLETED;
+
+      return {
+        ...prev,
+        status,
+        statusMessage: message,
+        isRecording: shouldClearRecording ? false : prev.isRecording,
+        isPaused: shouldClearRecording ? false : prev.isPaused,
+        isActive: shouldClearRecording ? false : prev.isActive,
+        recordingDuration: shouldClearRecording ? null : prev.recordingDuration,
+        activeDuration: shouldClearRecording ? null : prev.activeDuration,
+      };
+    });
+
+    if (status === RecordingStatus.IDLE || status === RecordingStatus.ERROR || status === RecordingStatus.COMPLETED) {
+      stopPolling();
+    }
+  }, [stopPolling]);
 
   /**
    * Sync recording state with backend
-   * Called on mount (fixes refresh desync) and periodically while recording
+   * Called on mount and periodically while recording
    */
-  const syncWithBackend = async () => {
+  const syncWithBackend = useCallback(async () => {
     try {
       const backendState = await recordingService.getRecordingState();
 
-      setState(prev => ({
-        ...prev,
-        isRecording: backendState.is_recording,
-        isPaused: backendState.is_paused,
-        isActive: backendState.is_active,
-        recordingDuration: backendState.recording_duration,
-        activeDuration: backendState.active_duration,
-      }));
+      setState(prev => {
+        // RACE CONDITION GUARD:
+        // If we are currently in the middle of stopping, processing transcripts,
+        // saving to DB, or already idle, do NOT let a delayed/in-flight polling response
+        // resurrect isRecording to true!
+        if (
+          prev.status === RecordingStatus.STOPPING ||
+          prev.status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
+          prev.status === RecordingStatus.SAVING ||
+          (!prev.isRecording && prev.status === RecordingStatus.IDLE)
+        ) {
+          return {
+            ...prev,
+            isPaused: backendState.is_paused,
+          };
+        }
+
+        // If backend says not recording, automatically stop polling
+        if (!backendState.is_recording && prev.isRecording) {
+          stopPolling();
+        }
+
+        return {
+          ...prev,
+          isRecording: backendState.is_recording,
+          isPaused: backendState.is_paused,
+          isActive: backendState.is_active,
+          recordingDuration: backendState.recording_duration,
+          activeDuration: backendState.active_duration,
+        };
+      });
 
       console.log('[RecordingStateContext] Synced with backend:', backendState);
     } catch (error) {
       console.error('[RecordingStateContext] Failed to sync with backend:', error);
-      // Don't update state on error - keep current state
     }
-  };
+  }, [stopPolling]);
 
   /**
    * Start polling backend state (called when recording starts)
    */
-  const startPolling = () => {
+  const startPolling = useCallback(() => {
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
     }
 
     console.log('[RecordingStateContext] Starting state polling (500ms interval)');
     pollingIntervalRef.current = setInterval(syncWithBackend, 500);
-  };
-
-  /**
-   * Stop polling backend state (called when recording stops)
-   */
-  const stopPolling = () => {
-    if (pollingIntervalRef.current) {
-      console.log('[RecordingStateContext] Stopping state polling');
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-  };
+  }, [syncWithBackend]);
 
   /**
    * Set up event listeners for backend state changes
@@ -144,7 +200,7 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
             isRecording: true,
             isPaused: false,
             isActive: true,
-            status: RecordingStatus.RECORDING,  // NEW: Set status to RECORDING
+            status: RecordingStatus.RECORDING,
           }));
           startPolling();
         });
@@ -153,16 +209,15 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
         // Recording stopped
         const unlistenStopped = await recordingService.onRecordingStopped((payload) => {
           console.log('[RecordingStateContext] Recording stopped event:', payload);
+          stopPolling();
           setState(prev => {
-            // Set status to STOPPING if not already in stop flow
-            // This ensures smooth UI transition for tray/keyboard stops
             const newStatus = [
               RecordingStatus.STOPPING,
               RecordingStatus.PROCESSING_TRANSCRIPTS,
               RecordingStatus.SAVING
             ].includes(prev.status)
-              ? prev.status  // Already in stop flow
-              : RecordingStatus.STOPPING;  // New stop, transition smoothly
+              ? prev.status
+              : RecordingStatus.STOPPING;
 
             return {
               ...prev,
@@ -175,7 +230,6 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
               activeDuration: null,
             };
           });
-          stopPolling();
         });
         unsubscribers.push(unlistenStopped);
 
@@ -225,14 +279,15 @@ export function RecordingStateProvider({ children }: { children: React.ReactNode
     syncWithBackend();
   }, []);
 
-  // NEW: Computed helpers from status
+  // Computed helpers from status and setters
   const contextValue = useMemo(() => ({
     ...state,
     setStatus,
+    setIsRecording,
     isStopping: state.status === RecordingStatus.STOPPING,
     isProcessing: state.status === RecordingStatus.PROCESSING_TRANSCRIPTS,
     isSaving: state.status === RecordingStatus.SAVING,
-  }), [state, setStatus]);
+  }), [state, setStatus, setIsRecording]);
 
   return (
     <RecordingStateContext.Provider value={contextValue}>

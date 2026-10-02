@@ -49,6 +49,7 @@ export function useRecordingStop(
   const {
     status,
     setStatus,
+    setIsRecording: setGlobalIsRecording,
     isStopping,
     isProcessing: isProcessingTranscript,
     isSaving: isSavingTranscript
@@ -137,6 +138,7 @@ export function useRecordingStop(
     // Set status to STOPPING immediately
     setStatus(RecordingStatus.STOPPING);
     setIsRecording(false);
+    setGlobalIsRecording?.(false);
     setIsRecordingDisabled(true);
     const stopStartTime = Date.now();
 

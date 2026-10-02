@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
@@ -40,6 +40,7 @@ interface SidebarContextType {
   toggleCollapse: () => void;
   meetings: CurrentMeeting[];
   setMeetings: (meetings: CurrentMeeting[]) => void;
+  isLoadingMeetings: boolean;
   isMeetingActive: boolean;
   setIsMeetingActive: (active: boolean) => void;
   handleRecordingToggle: () => void;
@@ -56,7 +57,6 @@ interface SidebarContextType {
   stopSummaryPolling: (meetingId: string) => void;
   // Refetch meetings from backend
   refetchMeetings: () => Promise<void>;
-
 }
 
 const SidebarContext = createContext<SidebarContextType | null>(null);
@@ -73,6 +73,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [currentMeeting, setCurrentMeeting] = useState<CurrentMeeting | null>({ id: 'intro-call', title: '+ New Call' });
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [meetings, setMeetings] = useState<CurrentMeeting[]>([]);
+  const [isLoadingMeetings, setIsLoadingMeetings] = useState<boolean>(true);
   const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
   const [isMeetingActive, setIsMeetingActive] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
@@ -89,29 +90,49 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
 
+  // Keep a reference to current active project id to prevent race conditions
+  const activeProjectIdRef = useRef<string | null | undefined>(activeProject?.id);
+
+  useEffect(() => {
+    activeProjectIdRef.current = activeProject?.id;
+  }, [activeProject?.id]);
+
   // Extract fetchMeetings as a reusable function
   const fetchMeetings = React.useCallback(async () => {
     if (!user) {
       setMeetings([]);
+      setIsLoadingMeetings(false);
       return;
     }
     if (serverAddress) {
+      const requestedProjectId = activeProject?.id || null;
       try {
+        setIsLoadingMeetings(true);
         const fetchedMeetings = await invoke('api_get_meetings', {
-          projectId: activeProject?.id || null,
+          projectId: requestedProjectId,
         }) as Array<{ id: string, title: string, created_at?: string, project_id?: string }>;
-        const transformedMeetings = (fetchedMeetings || []).map((meeting: any) => ({
-          id: meeting.id,
-          title: meeting.title,
-          created_at: meeting.created_at,
-          project_id: meeting.project_id,
-        }));
-        setMeetings(transformedMeetings);
+
+        // Only update state if active project hasn't changed while request was in-flight
+        if (activeProjectIdRef.current === activeProject?.id) {
+          const transformedMeetings = (fetchedMeetings || []).map((meeting: any) => ({
+            id: meeting.id,
+            title: meeting.title,
+            created_at: meeting.created_at,
+            project_id: meeting.project_id,
+          }));
+          setMeetings(transformedMeetings);
+        }
         Analytics.trackBackendConnection(true);
       } catch (error) {
         console.error('Error fetching meetings:', error);
-        setMeetings([]);
+        if (activeProjectIdRef.current === activeProject?.id) {
+          setMeetings([]);
+        }
         Analytics.trackBackendConnection(false, error instanceof Error ? error.message : 'Unknown error');
+      } finally {
+        if (activeProjectIdRef.current === activeProject?.id) {
+          setIsLoadingMeetings(false);
+        }
       }
     }
   }, [serverAddress, user, activeProject?.id]);
@@ -119,7 +140,11 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) {
       setMeetings([]);
+      setIsLoadingMeetings(false);
     } else {
+      // Clear meetings immediately so stale meetings from previous project never flash
+      setMeetings([]);
+      setIsLoadingMeetings(true);
       fetchMeetings();
     }
   }, [user?.id, activeProject?.id, serverAddress, fetchMeetings]);
@@ -306,6 +331,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       toggleCollapse,
       meetings,
       setMeetings,
+      isLoadingMeetings,
       isMeetingActive,
       setIsMeetingActive,
       handleRecordingToggle,

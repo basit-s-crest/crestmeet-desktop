@@ -79,6 +79,16 @@ export function NetworkTab() {
     );
   };
 
+  const counts = useMemo(() => {
+    let fetchCount = 0;
+    let ipcCount = 0;
+    requests.forEach((r) => {
+      if (r.type === 'ipc') ipcCount++;
+      else fetchCount++;
+    });
+    return { all: requests.length, fetch: fetchCount, ipc: ipcCount };
+  }, [requests]);
+
   return (
     <div className="flex flex-col h-full text-xs font-sans relative">
       {/* Search & Filters */}
@@ -120,13 +130,20 @@ export function NetworkTab() {
             <button
               key={t}
               onClick={() => setTypeFilter(t)}
-              className={`px-2 py-0.5 rounded transition-colors uppercase font-medium text-[10px] ${
+              className={`px-2 py-0.5 rounded transition-colors uppercase font-medium text-[10px] flex items-center gap-1 ${
                 typeFilter === t
                   ? 'bg-neutral-200 text-neutral-900'
                   : 'bg-neutral-800/80 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800'
               }`}
             >
-              {t === 'fetch' ? 'HTTP/Fetch' : t}
+              <span>{t === 'fetch' ? 'HTTP/Fetch' : t}</span>
+              <span
+                className={`text-[9px] px-1 py-0.2 rounded font-mono ${
+                  typeFilter === t ? 'bg-neutral-300 text-neutral-950' : 'bg-neutral-700/60 text-neutral-300'
+                }`}
+              >
+                {counts[t]}
+              </span>
             </button>
           ))}
         </div>

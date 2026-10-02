@@ -103,7 +103,7 @@ export function initializeInterceptors() {
     });
   });
 
-  // 3. Organic Fetch Interception
+  // 3. Organic Fetch Interception (including Tauri v2 IPC calls)
   const originalFetch = window.fetch;
   window.fetch = async function (...fetchArgs: Parameters<typeof fetch>) {
     const start = performance.now();
@@ -113,6 +113,27 @@ export function initializeInterceptors() {
     let method = config?.method || (resource instanceof Request ? resource.method : 'GET');
     method = method.toUpperCase();
 
+    // Prevent double logging if wrappedInvoke already recorded this
+    const isAlreadyLogged =
+      config?.headers &&
+      ((config.headers instanceof Headers && config.headers.has('X-Observability-Logged')) ||
+        (!Array.isArray(config.headers) &&
+          typeof config.headers === 'object' &&
+          'X-Observability-Logged' in config.headers));
+    if (isAlreadyLogged) {
+      return originalFetch.apply(this, fetchArgs);
+    }
+
+    // Detect if this request is a Tauri v2 IPC call
+    const isIpc =
+      url.startsWith('ipc:') ||
+      url.includes('ipc.localhost') ||
+      (typeof resource === 'object' && resource instanceof Request && resource.headers?.has('Tauri-Invoke-Key')) ||
+      (config?.headers && (
+        (config.headers instanceof Headers && config.headers.has('Tauri-Invoke-Key')) ||
+        (!Array.isArray(config.headers) && typeof config.headers === 'object' && ('Tauri-Invoke-Key' in config.headers || 'tauri-invoke-key' in config.headers))
+      ));
+
     let domain = 'localhost';
     let name = url;
     try {
@@ -121,6 +142,19 @@ export function initializeInterceptors() {
       name = parsedUrl.pathname + parsedUrl.search;
     } catch {
       // fallback
+    }
+
+    let cmdName = name;
+    if (isIpc) {
+      domain = 'Rust Core';
+      method = 'IPC';
+      try {
+        const urlObj = new URL(url, 'http://ipc.localhost');
+        cmdName = decodeURIComponent(urlObj.pathname.replace(/^\/+/, ''));
+      } catch {
+        cmdName = url.split('/').pop() || url;
+      }
+      name = `invoke('${cmdName}')`;
     }
 
     let requestBody: any;
@@ -137,7 +171,7 @@ export function initializeInterceptors() {
     }
 
     const netId = telemetryStore.addNetwork({
-      type: 'fetch',
+      type: isIpc ? 'ipc' : 'fetch',
       name: name || url,
       method,
       url,
@@ -164,9 +198,13 @@ export function initializeInterceptors() {
         // ignore clone error
       }
 
+      const isIpcSuccess = isIpc
+        ? response.headers.get('Tauri-Response') === 'ok' || response.status === 200
+        : response.status < 400;
+
       telemetryStore.updateNetwork(netId, {
-        status: response.status,
-        statusText: response.statusText,
+        status: isIpc ? (isIpcSuccess ? 200 : 'failed') : response.status,
+        statusText: isIpc ? (isIpcSuccess ? 'OK' : 'IPC Error') : response.statusText,
         durationMs,
         responseBody,
       });
@@ -176,7 +214,7 @@ export function initializeInterceptors() {
       const durationMs = Math.round(performance.now() - start);
       telemetryStore.updateNetwork(netId, {
         status: 'failed',
-        statusText: err?.message || 'Network Failed',
+        statusText: isIpc ? 'IPC Failed' : (err?.message || 'Network Failed'),
         durationMs,
         error: err?.message || String(err),
       });
@@ -267,7 +305,14 @@ export function initializeInterceptors() {
         });
 
         try {
-          const result = await originalIpcInvoke.call(tauriGlobal, cmd, args, options);
+          const optsWithHeader = {
+            ...options,
+            headers: {
+              ...(options?.headers || {}),
+              'X-Observability-Logged': '1',
+            },
+          };
+          const result = await originalIpcInvoke.call(tauriGlobal, cmd, args, optsWithHeader);
           const durationMs = Math.round(performance.now() - start);
 
           // Truncate response representation to prevent memory bloat on large arrays

@@ -27,6 +27,7 @@ import {
   Archive,
   RotateCcw,
   FileText,
+  LoaderIcon,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useSidebar, CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
@@ -83,7 +84,7 @@ const OVERVIEW_TABS = [
 export default function MeetingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { meetings, setMeetings, setCurrentMeeting } = useSidebar();
+  const { meetings, setMeetings, setCurrentMeeting, isLoadingMeetings } = useSidebar();
   const { user } = useAuth();
   const { projects, activeProject, switchProject, archiveProject, deleteProject } = useProject();
 
@@ -157,6 +158,16 @@ export default function MeetingsPage() {
       }
     }
   }, [projects]);
+
+  // Keep selectedProject in sync when activeProject changes (e.g. switched from ProjectSwitcher)
+  useEffect(() => {
+    if (selectedProject && activeProject && selectedProject.id !== activeProject.id) {
+      const found = projects.find((p) => p.id === activeProject.id);
+      if (found) {
+        setSelectedProject(found);
+      }
+    }
+  }, [activeProject, selectedProject, projects]);
 
   // Update animated tab underline position for overview tabs
   useLayoutEffect(() => {
@@ -238,9 +249,30 @@ export default function MeetingsPage() {
     );
   }, [archivedProjects, archivedSearch]);
 
+  // Determine if meetings for the selected project are currently loading or switching
+  const isProjectMeetingsLoading =
+    isLoadingMeetings ||
+    (selectedProject ? activeProject?.id !== selectedProject.id : false);
+
+  // Total meetings count for selected project
+  const selectedProjectMeetingsCount = useMemo(() => {
+    if (!selectedProject) return 0;
+    return meetings.filter((m) =>
+      !m.project_id ? selectedProject.is_personal : m.project_id === selectedProject.id
+    ).length;
+  }, [meetings, selectedProject]);
+
   // Filter and sort meetings for the inside-project view
   const filteredAndSortedMeetings = useMemo(() => {
-    let result = [...meetings];
+    if (!selectedProject) return [];
+
+    // Filter to only include meetings belonging to this specific project
+    let result = meetings.filter((m) => {
+      if (!m.project_id) {
+        return selectedProject.is_personal;
+      }
+      return m.project_id === selectedProject.id;
+    });
 
     // Name search filter
     if (meetingSearch.trim()) {
@@ -416,8 +448,12 @@ export default function MeetingsPage() {
                       </span>
                     )}
                     {renderRoleBadge(selectedProject.role)}
-                    <span className="text-xs font-medium text-gray-600 px-2.5 py-1 rounded-full bg-gray-100 border border-gray-200">
-                      {meetings.length} {meetings.length === 1 ? 'call' : 'calls'}
+                    <span className="text-xs font-medium text-gray-600 px-2.5 py-1 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center min-w-[50px] min-h-[26px]">
+                      {isProjectMeetingsLoading ? (
+                        <LoaderIcon className="w-3.5 h-3.5 animate-spin text-gray-400" />
+                      ) : (
+                        `${selectedProjectMeetingsCount} ${selectedProjectMeetingsCount === 1 ? 'call' : 'calls'}`
+                      )}
                     </span>
                   </div>
                   <p className="text-sm text-gray-500 mt-1">
@@ -914,15 +950,27 @@ export default function MeetingsPage() {
               </div>
 
               {/* Showing X of Y meetings counter */}
-              <div className="px-1">
-                <span className="text-xs sm:text-sm font-medium text-gray-600">
-                  Showing {filteredAndSortedMeetings.length} of {meetings.length} meetings
-                </span>
+              <div className="px-1 min-h-[24px] flex items-center">
+                {isProjectMeetingsLoading ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-gray-500 font-medium">
+                    <LoaderIcon className="w-3.5 h-3.5 animate-spin text-gray-400" />
+                    <span>Loading calls...</span>
+                  </span>
+                ) : (
+                  <span className="text-xs sm:text-sm font-medium text-gray-600">
+                    Showing {filteredAndSortedMeetings.length} of {selectedProjectMeetingsCount} meetings
+                  </span>
+                )}
               </div>
 
               {/* Meeting Records List */}
               <div className="space-y-3">
-                {filteredAndSortedMeetings.length > 0 ? (
+                {isProjectMeetingsLoading ? (
+                  <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl border border-gray-200 shadow-2xs">
+                    <LoaderIcon className="animate-spin size-6 text-gray-400 mb-2.5" />
+                    <p className="text-xs text-gray-500 font-medium">Loading project meetings...</p>
+                  </div>
+                ) : filteredAndSortedMeetings.length > 0 ? (
                   filteredAndSortedMeetings.map((meeting) => (
                     <div
                       key={meeting.id}
@@ -1003,32 +1051,16 @@ export default function MeetingsPage() {
                         ? 'Try adjusting your search query or clear the filter.'
                         : 'Recordings made while this project is active will be automatically organized here.'}
                     </p>
-                    {(meetingSearch || dateFilter !== 'all') && (
+                    {meetingSearch && (
                       <div className="mt-4 flex items-center justify-center gap-2">
-                        {meetingSearch && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setMeetingSearch('')}
-                            className="text-xs"
-                          >
-                            Clear Search
-                          </Button>
-                        )}
-                        {dateFilter !== 'all' && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setDateFilter('all');
-                              setCustomDateStart('');
-                              setCustomDateEnd('');
-                            }}
-                            className="text-xs"
-                          >
-                            Reset Date Filter
-                          </Button>
-                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setMeetingSearch('')}
+                          className="text-xs"
+                        >
+                          Clear Search
+                        </Button>
                       </div>
                     )}
                   </div>

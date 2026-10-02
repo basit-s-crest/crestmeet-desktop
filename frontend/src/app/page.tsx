@@ -275,7 +275,11 @@ export default function Home() {
                       onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
                       onRecordingStart={handleInitiateRecording}
                       onTranscriptReceived={() => { }} // Not actually used by RecordingControls
-                      onStopInitiated={() => setIsStopping(true)}
+                      onStopInitiated={() => {
+                        setIsStopping(true);
+                        setIsRecordingState(false);
+                        recordingState.setIsRecording(false);
+                      }}
                       barHeights={barHeights}
                       onTranscriptionError={(message) => {
                         showModal('errorAlert', message);
