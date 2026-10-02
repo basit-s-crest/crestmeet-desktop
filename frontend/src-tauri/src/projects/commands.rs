@@ -300,3 +300,46 @@ pub async fn api_project_archive(
     ProjectsRepository::archive_project(pool, user_id, pid, archive).await
 }
 
+/// Get all project invitations sent to the current authenticated user's email
+#[tauri::command]
+pub async fn api_get_my_invitations(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::database::models::UserProjectInvitation>, String> {
+    let user_id = get_authenticated_user(&state).await?;
+    let pool = state.db_manager.pool();
+
+    let user_email = sqlx::query_scalar::<_, String>("SELECT email FROM app_users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "User account email not found".to_string())?;
+
+    ProjectsRepository::get_user_invitations(pool, &user_email)
+        .await
+        .map_err(|e| format!("Failed to retrieve invitations: {}", e))
+}
+
+/// Accept or decline a project invitation from the Inbox
+#[tauri::command]
+pub async fn api_respond_to_invitation(
+    state: State<'_, AppState>,
+    invitation_id: String,
+    accept: bool,
+) -> Result<String, String> {
+    let user_id = get_authenticated_user(&state).await?;
+    let pool = state.db_manager.pool();
+
+    let user_email = sqlx::query_scalar::<_, String>("SELECT email FROM app_users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "User account email not found".to_string())?;
+
+    let inv_id = Uuid::from_str(&invitation_id).map_err(|_| "Invalid invitation ID format".to_string())?;
+
+    ProjectsRepository::respond_to_invitation(pool, user_id, &user_email, inv_id, accept).await
+}
+
+

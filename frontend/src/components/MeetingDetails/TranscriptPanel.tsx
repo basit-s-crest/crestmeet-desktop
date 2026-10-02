@@ -30,11 +30,14 @@ interface TranscriptPanelProps {
   meetingFolderPath?: string | null;
   onRefetchTranscripts?: () => Promise<void>;
 
-  // P2P video props
+  // Video & Google Drive Streaming props
   hasVideo?: boolean;
   recorderId?: string;
   recorderEmail?: string;
   projectId?: string;
+  driveFileId?: string | null;
+  videoUrl?: string | null;
+  uploadStatus?: string | null;
 
   // Resizable width in pixels
   width?: number;
@@ -62,6 +65,9 @@ export function TranscriptPanel({
   recorderId,
   recorderEmail,
   projectId,
+  driveFileId,
+  videoUrl,
+  uploadStatus,
   width,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
@@ -98,7 +104,7 @@ export function TranscriptPanel({
         />
       </div>
 
-      {/* Meeting Screen Recording Video Player (if video was captured) */}
+      {/* Meeting Screen Recording Video Player / Google Drive Streaming Player */}
       <MeetingVideoPlayer
         meetingId={meetingId}
         folderPath={meetingFolderPath}
@@ -106,6 +112,9 @@ export function TranscriptPanel({
         recorderId={recorderId}
         recorderEmail={recorderEmail}
         projectId={projectId}
+        driveFileId={driveFileId}
+        videoUrl={videoUrl}
+        uploadStatus={uploadStatus}
       />
 
       {/* Transcript content - use virtualized view for better performance */}

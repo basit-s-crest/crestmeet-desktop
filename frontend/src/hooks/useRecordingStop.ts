@@ -274,15 +274,6 @@ export function useRecordingStop(
               await invoke('api_save_meeting_video', { folderPath, videoData });
               console.log('✅ Recorded meeting video saved successfully');
               hasVideo = true;
-
-              // Automatically merge audio + video with FFmpeg in the background
-              try {
-                console.log(`🎬 Merging meeting video and audio in ${folderPath}...`);
-                await invoke('api_merge_meeting_video_and_audio', { folderPath });
-                console.log('✅ Successfully merged meeting video with audio');
-              } catch (mergeErr) {
-                console.warn('Could not merge video and audio (will use raw video):', mergeErr);
-              }
             }
           } catch (videoErr) {
             console.error('Failed to save meeting video:', videoErr);
@@ -372,15 +363,26 @@ export function useRecordingStop(
             duration: 10000,
           });
 
-          // Auto-navigate after a short delay with source parameter
+          // Start parallel background video merge and Google Drive upload without blocking redirect
+          if (hasVideo && folderPath && meetingId) {
+            console.log('🚀 Triggering parallel background video merge and Google Drive upload...');
+            invoke('api_start_background_media_processing_and_upload', {
+              meetingId,
+              folderPath,
+            }).catch((err) => {
+              console.warn('Background media upload failed to start:', err);
+            });
+          }
+
+          // Auto-navigate immediately with source parameter
           setTimeout(() => {
             router.push(`/meeting-details?id=${meetingId}&source=recording`);
-            clearTranscripts()
+            clearTranscripts();
             Analytics.trackPageView('meeting_details');
 
             // Reset to IDLE after navigation
             setStatus(RecordingStatus.IDLE);
-          }, 2000);
+          }, 350);
           // Track meeting completion analytics
           try {
             // Calculate meeting duration from transcript timestamps

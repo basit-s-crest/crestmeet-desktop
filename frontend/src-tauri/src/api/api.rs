@@ -134,6 +134,12 @@ pub struct MeetingDetails {
     pub user_id: Option<String>,
     pub project_id: Option<String>,
     pub recorder_email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drive_file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_status: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -164,6 +170,12 @@ pub struct MeetingMetadata {
     pub user_id: Option<String>,
     pub project_id: Option<String>,
     pub recorder_email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drive_file_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_status: Option<String>,
 }
 
 /// Paginated transcripts response with total count
@@ -986,6 +998,9 @@ pub async fn api_get_meeting_metadata<R: Runtime>(
                 user_id: meeting.user_id.map(|u| u.to_string()),
                 project_id: meeting.project_id.map(|p| p.to_string()),
                 recorder_email,
+                video_url: meeting.video_url,
+                drive_file_id: meeting.drive_file_id,
+                upload_status: meeting.upload_status,
             })
         }
         Ok(None) => {

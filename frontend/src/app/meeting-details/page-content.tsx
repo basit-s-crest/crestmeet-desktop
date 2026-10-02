@@ -320,6 +320,9 @@ export default function PageContent({
           recorderId={meeting.user_id}
           recorderEmail={meeting.recorder_email}
           projectId={meeting.project_id || activeProject?.id}
+          driveFileId={(meeting as any).drive_file_id}
+          videoUrl={(meeting as any).video_url}
+          uploadStatus={(meeting as any).upload_status}
           width={transcriptWidth}
         />
 

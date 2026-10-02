@@ -21,6 +21,7 @@ import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
 import { useConfig } from '@/contexts/ConfigContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useProject } from '@/contexts/ProjectContext';
 
 import Logo from '../Logo';
 import Info from '../Info';
@@ -54,6 +55,8 @@ const Sidebar: React.FC = () => {
       delete (window as any).openSettings;
     };
   }, [router]);
+
+  const { pendingInvitationsCount } = useProject();
 
   const isHomePage = pathname === '/';
   const isMeetingPage = pathname === '/meetings' || pathname?.includes('/meeting-details');
@@ -271,6 +274,7 @@ const Sidebar: React.FC = () => {
                   </span>
                 )}
               </button>
+
 
               {/* AI Assistant */}
               <button

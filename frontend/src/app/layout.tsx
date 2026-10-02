@@ -31,6 +31,8 @@ import { AuthGate } from '@/components/auth/AuthGate'
 import { ProjectProvider } from '@/contexts/ProjectContext'
 import { IncomingMediaRequestBanner } from '@/components/IncomingMediaRequestBanner'
 import { ObservabilityDrawer } from '@/components/Observability'
+import { GoogleDriveUploadProvider } from '@/contexts/GoogleDriveUploadContext'
+import { UploadProgressWidget } from '@/components/GoogleDrive/UploadProgressWidget'
 
 const sourceSans3 = Source_Sans_3({
   subsets: ['latin'],
@@ -257,46 +259,50 @@ export default function RootLayout({
         <AnalyticsProvider>          <AuthProvider>
             <AuthGate>
               <ProjectProvider>
-                <IncomingMediaRequestBanner />
-                <RecordingStateProvider>
-                  <TranscriptProvider>
-                    <ConfigProvider>
-                      <OllamaDownloadProvider>
-                        <OnboardingProvider>
-                          <UpdateCheckProvider>
-                            <SidebarProvider>
-                              <TooltipProvider>
-                                <RecordingPostProcessingProvider>
-                                  <ImportDialogProvider onOpen={handleOpenImportDialog}>
-                                    {/* Download progress toast provider - listens for background downloads */}
-                                    <DownloadProgressToastProvider />
+                <GoogleDriveUploadProvider>
+                  <IncomingMediaRequestBanner />
+                  <RecordingStateProvider>
+                    <TranscriptProvider>
+                      <ConfigProvider>
+                        <OllamaDownloadProvider>
+                          <OnboardingProvider>
+                            <UpdateCheckProvider>
+                              <SidebarProvider>
+                                <TooltipProvider>
+                                  <RecordingPostProcessingProvider>
+                                    <ImportDialogProvider onOpen={handleOpenImportDialog}>
+                                      {/* Download progress toast provider - listens for background downloads */}
+                                      <DownloadProgressToastProvider />
+                                      {/* Parallel background upload widget for Google Drive */}
+                                      <UploadProgressWidget />
 
-                                    {/* Show onboarding or main app */}
-                                    {showOnboarding ? (
-                                      <OnboardingFlow onComplete={handleOnboardingComplete} />
-                                    ) : (
-                                      <div className="flex">
-                                        <Sidebar />
-                                        <MainContent>{children}</MainContent>
-                                      </div>
-                                    )}
-                                    {/* Import audio overlay and dialog */}
-                                    <ImportDropOverlay visible={showDropOverlay} />
-                                    <ConditionalImportDialog
-                                      showImportDialog={showImportDialog}
-                                      handleImportDialogClose={handleImportDialogClose}
-                                      importFilePath={importFilePath}
-                                    />
-                                  </ImportDialogProvider>
-                                </RecordingPostProcessingProvider>
-                              </TooltipProvider>
-                            </SidebarProvider>
-                          </UpdateCheckProvider>
-                        </OnboardingProvider>
-                      </OllamaDownloadProvider>
-                    </ConfigProvider>
-                  </TranscriptProvider>
-                </RecordingStateProvider>
+                                      {/* Show onboarding or main app */}
+                                      {showOnboarding ? (
+                                        <OnboardingFlow onComplete={handleOnboardingComplete} />
+                                      ) : (
+                                        <div className="flex">
+                                          <Sidebar />
+                                          <MainContent>{children}</MainContent>
+                                        </div>
+                                      )}
+                                      {/* Import audio overlay and dialog */}
+                                      <ImportDropOverlay visible={showDropOverlay} />
+                                      <ConditionalImportDialog
+                                        showImportDialog={showImportDialog}
+                                        handleImportDialogClose={handleImportDialogClose}
+                                        importFilePath={importFilePath}
+                                      />
+                                    </ImportDialogProvider>
+                                  </RecordingPostProcessingProvider>
+                                </TooltipProvider>
+                              </SidebarProvider>
+                            </UpdateCheckProvider>
+                          </OnboardingProvider>
+                        </OllamaDownloadProvider>
+                      </ConfigProvider>
+                    </TranscriptProvider>
+                  </RecordingStateProvider>
+                </GoogleDriveUploadProvider>
               </ProjectProvider>
             </AuthGate>
           </AuthProvider>

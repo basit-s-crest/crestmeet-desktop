@@ -96,6 +96,9 @@ export interface MeetingMetadata {
   has_video?: boolean;
   user_id?: string;
   recorder_email?: string;
+  video_url?: string;
+  drive_file_id?: string;
+  upload_status?: string;
 }
 
 export interface MediaRequest {

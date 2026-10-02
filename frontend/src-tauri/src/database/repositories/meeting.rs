@@ -77,6 +77,26 @@ impl MeetingsRepository {
         }
     }
 
+    pub async fn update_meeting_drive_info(
+        pool: &PgPool,
+        meeting_id: &str,
+        video_url: Option<&str>,
+        drive_file_id: Option<&str>,
+        upload_status: &str,
+    ) -> Result<bool, SqlxError> {
+        let result = sqlx::query(
+            "UPDATE meetings SET video_url = COALESCE($1, video_url), drive_file_id = COALESCE($2, drive_file_id), upload_status = $3, updated_at = NOW() WHERE id = $4",
+        )
+        .bind(video_url)
+        .bind(drive_file_id)
+        .bind(upload_status)
+        .bind(meeting_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn get_meeting(
         pool: &PgPool,
         meeting_id: &str,
@@ -92,7 +112,7 @@ impl MeetingsRepository {
 
         // Get meeting details
         let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path, user_id, project_id, has_video FROM meetings WHERE id = $1")
+            sqlx::query_as("SELECT * FROM meetings WHERE id = $1")
                 .bind(meeting_id)
                 .fetch_optional(&mut *transaction)
                 .await?;
@@ -145,6 +165,9 @@ impl MeetingsRepository {
                 user_id: meeting.user_id.map(|u| u.to_string()),
                 project_id: meeting.project_id.map(|p| p.to_string()),
                 recorder_email,
+                video_url: meeting.video_url,
+                drive_file_id: meeting.drive_file_id,
+                upload_status: meeting.upload_status,
             }))
         } else {
             transaction.rollback().await?;
@@ -164,7 +187,7 @@ impl MeetingsRepository {
         }
 
         let meeting: Option<MeetingModel> =
-            sqlx::query_as("SELECT id, title, created_at, updated_at, folder_path, user_id, project_id, has_video FROM meetings WHERE id = $1")
+            sqlx::query_as("SELECT * FROM meetings WHERE id = $1")
                 .bind(meeting_id)
                 .fetch_optional(pool)
                 .await?;

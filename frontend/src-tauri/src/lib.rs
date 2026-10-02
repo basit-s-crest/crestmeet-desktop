@@ -38,6 +38,7 @@ pub mod console_utils;
 pub mod database;
 pub mod deepgram;
 pub mod google_calendar;
+pub mod google_drive;
 pub mod local_credentials;
 pub mod notifications;
 pub mod ollama;
@@ -657,6 +658,8 @@ pub fn run() {
             projects::commands::api_project_remove_member,
             projects::commands::api_project_update_member_role,
             projects::commands::api_project_revoke_invitation,
+            projects::commands::api_get_my_invitations,
+            projects::commands::api_respond_to_invitation,
             api::api_get_profile,
             api::api_save_profile,
             api::api_update_profile,
@@ -793,6 +796,12 @@ pub fn run() {
             google_calendar::api_google_calendar_start_auth,
             google_calendar::api_google_calendar_disconnect,
             google_calendar::api_google_calendar_create_event,
+            // Google Drive commands
+            google_drive::api_google_drive_get_status,
+            google_drive::api_google_drive_start_auth,
+            google_drive::api_google_drive_disconnect,
+            google_drive::api_start_background_media_processing_and_upload,
+            google_drive::api_retry_meeting_drive_upload,
             // Follow-up / Rescheduling extraction
             summary::reschedule_extractor::api_extract_reschedule_info,
             // Cross-Meeting AI Chatbot commands

@@ -22,6 +22,9 @@ interface MeetingDetailsResponse {
   user_id?: string;
   recorder_email?: string;
   project_id?: string;
+  video_url?: string;
+  drive_file_id?: string;
+  upload_status?: string;
 }
 
 function MeetingDetailsContent() {

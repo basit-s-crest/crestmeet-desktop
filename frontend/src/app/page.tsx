@@ -23,6 +23,7 @@ import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { SelectProjectDialog, CreateProjectDialog } from '@/components/Project';
 import { useProject } from '@/contexts/ProjectContext';
+import { InboxPopover } from '@/components/Inbox/InboxPopover';
 import { X } from 'lucide-react';
 
 export default function Home() {
@@ -232,8 +233,13 @@ export default function Home() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="flex flex-col h-screen bg-gray-50"
+      className="flex flex-col h-screen bg-gray-50 relative"
     >
+      {/* Top Right Floating Toolbar: Extension-Style Inbox Popover */}
+      <div className="absolute top-4 right-5 z-30">
+        <InboxPopover />
+      </div>
+
       {/* All Modals supported*/}
       <SettingsModals
         modals={modals}

@@ -411,29 +411,37 @@ impl ProjectsRepository {
         .await
         .map_err(|e| e.to_string())?;
 
-        if let Some(target_uid) = existing_user_id {
-            // Directly add or update membership
-            sqlx::query(
-                r#"
-                INSERT INTO project_members (project_id, user_id, role, added_by)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (project_id, user_id) 
-                DO UPDATE SET role = EXCLUDED.role
-                "#,
+        let existing_member = if let Some(target_uid) = existing_user_id {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2)"
             )
             .bind(project_id)
             .bind(target_uid)
-            .bind(clean_role)
-            .bind(caller_user_id)
-            .execute(pool)
+            .fetch_one(pool)
             .await
-            .map_err(|e| e.to_string())?;
+            .unwrap_or(false)
+        } else {
+            false
+        };
 
-            info!("Added existing user {} ({}) to project {}", clean_email, target_uid, project_id);
-            return Ok(format!("{} has been added to the project as {}", clean_email, clean_role));
+        if existing_member {
+            return Err(format!("{} is already a member of this project", clean_email));
         }
 
-        // Otherwise insert into project_invitations
+        let pending_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM project_invitations WHERE project_id = $1 AND LOWER(email) = $2 AND status = 'pending')"
+        )
+        .bind(project_id)
+        .bind(&clean_email)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        if pending_exists {
+            return Err(format!("An invitation is already pending for {}", clean_email));
+        }
+
+        // Insert into project_invitations so user can accept/decline in their Inbox
         sqlx::query(
             r#"
             INSERT INTO project_invitations (project_id, email, role, invited_by, status)
@@ -449,7 +457,7 @@ impl ProjectsRepository {
         .map_err(|e| e.to_string())?;
 
         info!("Created invitation for {} to project {}", clean_email, project_id);
-        Ok(format!("Invitation sent to {}. They will be added upon account registration.", clean_email))
+        Ok(format!("Invitation sent to {}. It will appear in their Inbox.", clean_email))
     }
 
     /// Remove a member from the project
@@ -583,5 +591,111 @@ impl ProjectsRepository {
         .map_err(|e| e.to_string())?;
 
         Ok(())
+    }
+
+    /// Get all invitations received by a specific user email
+    pub async fn get_user_invitations(
+        pool: &PgPool,
+        user_email: &str,
+    ) -> Result<Vec<crate::database::models::UserProjectInvitation>, SqlxError> {
+        let clean_email = user_email.trim().to_lowercase();
+        sqlx::query_as::<_, crate::database::models::UserProjectInvitation>(
+            r#"
+            SELECT 
+                pi.id,
+                pi.project_id,
+                p.name AS project_name,
+                p.description AS project_description,
+                pi.role,
+                pi.invited_by,
+                u.email AS invited_by_email,
+                pi.status,
+                pi.created_at,
+                pi.accepted_at
+            FROM project_invitations pi
+            JOIN projects p ON p.id = pi.project_id
+            LEFT JOIN app_users u ON u.id = pi.invited_by
+            WHERE LOWER(pi.email) = $1
+            ORDER BY 
+                CASE WHEN pi.status = 'pending' THEN 0 ELSE 1 END,
+                pi.created_at DESC
+            "#,
+        )
+        .bind(&clean_email)
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Respond to an invitation (accept or decline)
+    pub async fn respond_to_invitation(
+        pool: &PgPool,
+        user_id: Uuid,
+        user_email: &str,
+        invitation_id: Uuid,
+        accept: bool,
+    ) -> Result<String, String> {
+        let clean_email = user_email.trim().to_lowercase();
+
+        // Fetch pending invitation ensuring recipient email matches
+        let invitation = sqlx::query_as::<_, ProjectInvitation>(
+            r#"
+            SELECT id, project_id, email, role, invited_by, status, created_at, accepted_at
+            FROM project_invitations
+            WHERE id = $1 AND LOWER(email) = $2 AND status = 'pending'
+            "#,
+        )
+        .bind(invitation_id)
+        .bind(&clean_email)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Pending invitation not found or already responded".to_string())?;
+
+        let mut transaction = pool.begin().await.map_err(|e| e.to_string())?;
+
+        if accept {
+            // Add user to project_members
+            sqlx::query(
+                r#"
+                INSERT INTO project_members (project_id, user_id, role, added_by)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (project_id, user_id) 
+                DO UPDATE SET role = EXCLUDED.role
+                "#,
+            )
+            .bind(invitation.project_id)
+            .bind(user_id)
+            .bind(&invitation.role)
+            .bind(invitation.invited_by)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| format!("Failed to add member to project: {}", e))?;
+
+            // Mark invitation accepted
+            sqlx::query(
+                "UPDATE project_invitations SET status = 'accepted', accepted_at = NOW() WHERE id = $1",
+            )
+            .bind(invitation_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| format!("Failed to update invitation status: {}", e))?;
+
+            transaction.commit().await.map_err(|e| e.to_string())?;
+            info!("User {} accepted invite {} to project {}", user_id, invitation_id, invitation.project_id);
+            Ok("Invitation accepted! You have joined the project.".to_string())
+        } else {
+            // Mark invitation declined
+            sqlx::query(
+                "UPDATE project_invitations SET status = 'declined' WHERE id = $1",
+            )
+            .bind(invitation_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| format!("Failed to decline invitation: {}", e))?;
+
+            transaction.commit().await.map_err(|e| e.to_string())?;
+            info!("User {} declined invite {}", user_id, invitation_id);
+            Ok("Invitation declined.".to_string())
+        }
     }
 }

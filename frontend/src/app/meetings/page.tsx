@@ -91,6 +91,11 @@ export default function MeetingsPage() {
   // Selected project for drill-down view (null = viewing projects overview)
   const [selectedProject, setSelectedProject] = useState<ProjectWithRole | null>(null);
 
+  // Dedicated meetings state for the currently opened project
+  const [projectMeetings, setProjectMeetings] = useState<CurrentMeeting[]>([]);
+  const [isLoadingProjectMeetings, setIsLoadingProjectMeetings] = useState(false);
+  const prevActiveProjectIdRef = useRef<string | undefined>(activeProject?.id);
+
   // Overview tab: 'active' | 'archived'
   const [overviewTab, setOverviewTab] = useState<'active' | 'archived'>('active');
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -142,12 +147,11 @@ export default function MeetingsPage() {
       const found = projects.find((p) => p.id === projectIdParam);
       if (found) {
         setSelectedProject(found);
-        switchProject(found.id);
       }
     }
-  }, [searchParams, projects, switchProject]);
+  }, [searchParams, projects]);
 
-  // Keep selectedProject in sync when projects change (e.g. archived, restored, or updated)
+  // Keep selectedProject metadata updated when projects list changes (e.g. name or member count changed)
   useEffect(() => {
     if (selectedProject) {
       const found = projects.find((p) => p.id === selectedProject.id);
@@ -159,15 +163,62 @@ export default function MeetingsPage() {
     }
   }, [projects]);
 
-  // Keep selectedProject in sync when activeProject changes (e.g. switched from ProjectSwitcher)
+  // If user switches active project from external ProjectSwitcher dropdown
   useEffect(() => {
-    if (selectedProject && activeProject && selectedProject.id !== activeProject.id) {
-      const found = projects.find((p) => p.id === activeProject.id);
-      if (found) {
-        setSelectedProject(found);
+    if (activeProject && prevActiveProjectIdRef.current !== activeProject.id) {
+      prevActiveProjectIdRef.current = activeProject.id;
+      if (selectedProject && selectedProject.id !== activeProject.id) {
+        const found = projects.find((p) => p.id === activeProject.id);
+        if (found) {
+          setSelectedProject(found);
+        }
       }
     }
-  }, [activeProject, selectedProject, projects]);
+  }, [activeProject?.id, projects]);
+
+  // Directly fetch meetings whenever selectedProject changes
+  useEffect(() => {
+    if (!selectedProject) {
+      setProjectMeetings([]);
+      setIsLoadingProjectMeetings(false);
+      return;
+    }
+
+    let isCurrent = true;
+    setIsLoadingProjectMeetings(true);
+    setProjectMeetings([]); // Clear immediately so meetings from previous project never flash or linger
+
+    invoke<Array<{ id: string; title: string; created_at?: string; project_id?: string }>>(
+      'api_get_meetings',
+      { projectId: selectedProject.id }
+    )
+      .then((res) => {
+        if (isCurrent) {
+          const transformed = (res || []).map((m: any) => ({
+            id: m.id,
+            title: m.title,
+            created_at: m.created_at,
+            project_id: m.project_id,
+          }));
+          setProjectMeetings(transformed);
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load meetings for project:', err);
+        if (isCurrent) {
+          setProjectMeetings([]);
+        }
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsLoadingProjectMeetings(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [selectedProject?.id]);
 
   // Update animated tab underline position for overview tabs
   useLayoutEffect(() => {
@@ -182,16 +233,18 @@ export default function MeetingsPage() {
   }, [overviewTab, selectedProject]);
 
   // Open a specific project's meetings view
-  const handleOpenProject = async (project: ProjectWithRole) => {
+  const handleOpenProject = (project: ProjectWithRole) => {
     setSelectedProject(project);
     setMeetingSearch('');
-    await switchProject(project.id);
+    router.replace(`/meetings?project=${project.id}`);
+    switchProject(project.id).catch(console.error);
   };
 
   // Return to all projects overview
   const handleBackToProjects = () => {
     setSelectedProject(null);
     setMeetingSearch('');
+    router.replace('/meetings');
   };
 
   // Start recording directly for the currently selected project
@@ -249,25 +302,21 @@ export default function MeetingsPage() {
     );
   }, [archivedProjects, archivedSearch]);
 
-  // Determine if meetings for the selected project are currently loading or switching
-  const isProjectMeetingsLoading =
-    isLoadingMeetings ||
-    (selectedProject ? activeProject?.id !== selectedProject.id : false);
+  // Determine if meetings for the selected project are currently loading
+  const isProjectMeetingsLoading = isLoadingProjectMeetings;
 
   // Total meetings count for selected project
   const selectedProjectMeetingsCount = useMemo(() => {
     if (!selectedProject) return 0;
-    return meetings.filter((m) =>
-      !m.project_id ? selectedProject.is_personal : m.project_id === selectedProject.id
-    ).length;
-  }, [meetings, selectedProject]);
+    return projectMeetings.length;
+  }, [projectMeetings, selectedProject]);
 
   // Filter and sort meetings for the inside-project view
   const filteredAndSortedMeetings = useMemo(() => {
     if (!selectedProject) return [];
 
     // Filter to only include meetings belonging to this specific project
-    let result = meetings.filter((m) => {
+    let result = (projectMeetings || []).filter((m) => {
       if (!m.project_id) {
         return selectedProject.is_personal;
       }
@@ -334,7 +383,7 @@ export default function MeetingsPage() {
     });
 
     return result;
-  }, [meetings, meetingSearch, dateFilter, customDateStart, customDateEnd, sortOrder]);
+  }, [projectMeetings, selectedProject, meetingSearch, dateFilter, customDateStart, customDateEnd, sortOrder]);
 
   // Meeting deletion
   const handleDeleteConfirm = async () => {
@@ -343,6 +392,7 @@ export default function MeetingsPage() {
 
     try {
       await invoke('api_delete_meeting', { meetingId });
+      setProjectMeetings((prev) => prev.filter((m) => m.id !== meetingId));
       setMeetings(meetings.filter((m) => m.id !== meetingId));
       toast.success('Meeting deleted successfully');
     } catch (err: any) {
@@ -369,6 +419,9 @@ export default function MeetingsPage() {
         meetingId,
         title: newTitle,
       });
+      setProjectMeetings((prev) =>
+        prev.map((m) => (m.id === meetingId ? { ...m, title: newTitle } : m))
+      );
       setMeetings(
         meetings.map((m) => (m.id === meetingId ? { ...m, title: newTitle } : m))
       );
@@ -498,7 +551,7 @@ export default function MeetingsPage() {
                     className="flex items-center gap-2 border-gray-200 bg-white text-gray-800 hover:bg-gray-50 rounded-xl text-sm font-medium shadow-2xs h-10 px-3.5"
                   >
                     <Users className="w-4 h-4 text-gray-600" />
-                    <span>Members {selectedProject.member_count}</span>
+                    <span>Add Member</span>
                   </Button>
 
                   {(selectedProject.role === 'owner' || selectedProject.role === 'team_leader') && (

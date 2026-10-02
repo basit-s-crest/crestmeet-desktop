@@ -1,9 +1,7 @@
-// frontend/src/contexts/ProjectContext.tsx
-'use client';
-
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { ProjectWithRole } from '@/types/project';
+import { ProjectWithRole, UserProjectInvitation } from '@/types/project';
 import { projectService } from '@/services/projectService';
+import { invitationService } from '@/services/invitationService';
 import { useAuth } from './AuthContext';
 import { toast } from 'sonner';
 
@@ -17,6 +15,12 @@ interface ProjectContextType {
   updateProject: (projectId: string, name: string, description?: string) => Promise<ProjectWithRole>;
   deleteProject: (projectId: string) => Promise<boolean>;
   archiveProject: (projectId: string, archive?: boolean) => Promise<boolean>;
+  // Inbox Invitations
+  invitations: UserProjectInvitation[];
+  pendingInvitationsCount: number;
+  isLoadingInvitations: boolean;
+  refreshInvitations: () => Promise<void>;
+  respondToInvitation: (invitationId: string, accept: boolean) => Promise<boolean>;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
@@ -26,6 +30,8 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [projects, setProjects] = useState<ProjectWithRole[]>([]);
   const [activeProject, setActiveProject] = useState<ProjectWithRole | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [invitations, setInvitations] = useState<UserProjectInvitation[]>([]);
+  const [isLoadingInvitations, setIsLoadingInvitations] = useState(false);
 
   const refreshProjects = useCallback(async () => {
     if (!user) {
@@ -134,6 +140,41 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   };
 
+  const refreshInvitations = useCallback(async () => {
+    if (!user) {
+      setInvitations([]);
+      return;
+    }
+    try {
+      setIsLoadingInvitations(true);
+      const list = await invitationService.getMyInvitations();
+      setInvitations(list);
+    } catch (err) {
+      console.error('[ProjectContext] Failed to load invitations:', err);
+    } finally {
+      setIsLoadingInvitations(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    refreshInvitations();
+  }, [refreshInvitations]);
+
+  const respondToInvitation = async (invitationId: string, accept: boolean): Promise<boolean> => {
+    try {
+      const msg = await invitationService.respondToInvitation(invitationId, accept);
+      toast.success(msg);
+      await Promise.all([refreshInvitations(), refreshProjects()]);
+      return true;
+    } catch (err: any) {
+      console.error('[ProjectContext] Respond to invitation error:', err);
+      toast.error(typeof err === 'string' ? err : 'Failed to respond to invitation');
+      return false;
+    }
+  };
+
+  const pendingInvitationsCount = invitations.filter(inv => inv.status === 'pending').length;
+
   return (
     <ProjectContext.Provider
       value={{
@@ -146,6 +187,11 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         updateProject,
         deleteProject,
         archiveProject,
+        invitations,
+        pendingInvitationsCount,
+        isLoadingInvitations,
+        refreshInvitations,
+        respondToInvitation,
       }}
     >
       {children}

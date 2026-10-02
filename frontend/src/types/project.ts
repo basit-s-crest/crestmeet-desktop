@@ -30,7 +30,20 @@ export interface ProjectInvitation {
   email: string;
   role: 'team_leader' | 'member';
   invited_by: string | null;
-  status: 'pending' | 'accepted' | 'revoked';
+  status: 'pending' | 'accepted' | 'declined' | 'revoked';
+  created_at: string;
+  accepted_at: string | null;
+}
+
+export interface UserProjectInvitation {
+  id: string;
+  project_id: string;
+  project_name: string;
+  project_description: string | null;
+  role: 'team_leader' | 'member';
+  invited_by: string | null;
+  invited_by_email: string | null;
+  status: 'pending' | 'accepted' | 'declined' | 'revoked';
   created_at: string;
   accepted_at: string | null;
 }
@@ -44,3 +57,4 @@ export interface ProjectMembersResponse {
   members: ProjectMemberWithUser[];
   pending_invitations: ProjectInvitation[];
 }
+

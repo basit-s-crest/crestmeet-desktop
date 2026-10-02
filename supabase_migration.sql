@@ -93,3 +93,16 @@ CREATE INDEX IF NOT EXISTS idx_transcripts_user_id ON transcripts(user_id);
 CREATE INDEX IF NOT EXISTS idx_meeting_notes_user_id ON meeting_notes(user_id);
 CREATE INDEX IF NOT EXISTS idx_summary_processes_user_id ON summary_processes(user_id);
 CREATE INDEX IF NOT EXISTS idx_transcript_chunks_user_id ON transcript_chunks(user_id);
+
+-- 13. Cloud Google Drive Sync & Project Invitations
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS video_url TEXT;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS drive_file_id TEXT;
+ALTER TABLE meetings ADD COLUMN IF NOT EXISTS upload_status TEXT DEFAULT 'pending';
+
+DO $$
+BEGIN
+    ALTER TABLE project_invitations DROP CONSTRAINT IF EXISTS project_invitations_status_check;
+    ALTER TABLE project_invitations ADD CONSTRAINT project_invitations_status_check CHECK (status IN ('pending', 'accepted', 'declined', 'revoked'));
+EXCEPTION
+    WHEN OTHERS THEN NULL;
+END $$;

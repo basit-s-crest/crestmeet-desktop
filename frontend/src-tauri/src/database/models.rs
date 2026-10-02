@@ -19,6 +19,15 @@ pub struct MeetingModel {
     #[sqlx(default)]
     #[serde(default)]
     pub has_video: bool,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub video_url: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub drive_file_id: Option<String>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub upload_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
@@ -210,7 +219,21 @@ pub struct ProjectInvitation {
     pub email: String,
     pub role: String, // "team_leader", "member"
     pub invited_by: Option<Uuid>,
-    pub status: String, // "pending", "accepted", "revoked"
+    pub status: String, // "pending", "accepted", "declined", "revoked"
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub accepted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct UserProjectInvitation {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub project_description: Option<String>,
+    pub role: String,
+    pub invited_by: Option<Uuid>,
+    pub invited_by_email: Option<String>,
+    pub status: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub accepted_at: Option<chrono::DateTime<chrono::Utc>>,
 }

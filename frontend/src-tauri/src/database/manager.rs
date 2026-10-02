@@ -241,7 +241,7 @@ impl DatabaseManager {
                 email TEXT NOT NULL,
                 role TEXT NOT NULL CHECK (role IN ('team_leader', 'member')),
                 invited_by UUID,
-                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'revoked')),
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined', 'revoked')),
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 accepted_at TIMESTAMPTZ
             );
@@ -251,12 +251,24 @@ impl DatabaseManager {
             CREATE INDEX IF NOT EXISTS idx_project_invitations_email ON project_invitations(LOWER(email));
             ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT FALSE;
 
-            -- Denormalized project_id on child tables
+            -- Denormalized project_id and cloud drive sync on child tables
             ALTER TABLE meetings ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE SET NULL;
             ALTER TABLE meetings ADD COLUMN IF NOT EXISTS has_video BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE meetings ADD COLUMN IF NOT EXISTS video_url TEXT;
+            ALTER TABLE meetings ADD COLUMN IF NOT EXISTS drive_file_id TEXT;
+            ALTER TABLE meetings ADD COLUMN IF NOT EXISTS upload_status TEXT DEFAULT 'pending';
             ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
             ALTER TABLE summary_processes ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
             ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE;
+
+            -- Ensure project_invitations supports declined status
+            DO $$
+            BEGIN
+                ALTER TABLE project_invitations DROP CONSTRAINT IF EXISTS project_invitations_status_check;
+                ALTER TABLE project_invitations ADD CONSTRAINT project_invitations_status_check CHECK (status IN ('pending', 'accepted', 'declined', 'revoked'));
+            EXCEPTION
+                WHEN OTHERS THEN NULL;
+            END $$;
 
             -- =========================================================================
             -- Media Requests Schema (P2P On-Demand Media Sharing)
