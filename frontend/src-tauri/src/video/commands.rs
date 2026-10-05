@@ -88,6 +88,7 @@ pub async fn api_check_meeting_video(folder_path: String) -> Result<Option<Strin
 }
 
 /// Merges meeting video (e.g. meeting_video.webm) and meeting audio (e.g. audio.mp4) using FFmpeg into a single file with audio.
+/// If meeting only has audio (audio.mp4 / audio.wav), packages it into an MP4 with a dark slate backdrop so Google Drive and the in-app player stream it natively.
 #[tauri::command]
 pub async fn api_merge_meeting_video_and_audio(folder_path: String) -> Result<String, String> {
     if folder_path.trim().is_empty() {
@@ -99,82 +100,67 @@ pub async fn api_merge_meeting_video_and_audio(folder_path: String) -> Result<St
         return Err(format!("Meeting folder does not exist: {}", folder_path));
     }
 
-    // Locate video file
-    let video_path = if dir.join("meeting_video.webm").exists() {
-        dir.join("meeting_video.webm")
-    } else if dir.join("recording.webm").exists() {
-        dir.join("recording.webm")
+    let output_path = dir.join("meeting_video_merged.mp4");
+    let should_reuse = if output_path.exists() && output_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+        let out_mtime = output_path.metadata().and_then(|m| m.modified()).ok();
+        let raw_mtime = dir.join("meeting_video.webm").metadata().and_then(|m| m.modified()).ok();
+        match (out_mtime, raw_mtime) {
+            (Some(out_t), Some(raw_t)) => out_t >= raw_t,
+            _ => true,
+        }
     } else {
-        return Err("No video file found to merge".to_string());
+        false
     };
 
-    // Locate audio file
-    let audio_path = if dir.join("audio.mp4").exists() {
-        dir.join("audio.mp4")
-    } else if dir.join("audio.wav").exists() {
-        dir.join("audio.wav")
-    } else if dir.join("audio.m4a").exists() {
-        dir.join("audio.m4a")
+    if should_reuse {
+        return Ok(output_path.to_string_lossy().to_string());
+    }
+
+    // Locate video file if present
+    let video_path = if dir.join("meeting_video.webm").exists() {
+        Some(dir.join("meeting_video.webm"))
+    } else if dir.join("recording.webm").exists() {
+        Some(dir.join("recording.webm"))
+    } else if dir.join("meeting_video.mp4").exists() {
+        Some(dir.join("meeting_video.mp4"))
     } else {
-        return Err("No audio file found to merge with video".to_string());
+        None
+    };
+
+    // Locate audio file if present
+    let audio_path = if dir.join("audio.mp4").exists() {
+        Some(dir.join("audio.mp4"))
+    } else if dir.join("audio.wav").exists() {
+        Some(dir.join("audio.wav"))
+    } else if dir.join("audio.m4a").exists() {
+        Some(dir.join("audio.m4a"))
+    } else {
+        None
     };
 
     let ffmpeg_path = crate::audio::ffmpeg::find_ffmpeg_path()
         .ok_or_else(|| "FFmpeg executable not found on system".to_string())?;
 
-    let output_path = dir.join("meeting_video_merged.mp4");
-    log_info!(
-        "🎬 Merging video ({:?}) and audio ({:?}) -> {:?}",
-        video_path,
-        audio_path,
-        output_path
-    );
+    if let (Some(v_path), Some(a_path)) = (&video_path, &audio_path) {
+        log_info!(
+            "🎬 Merging video ({:?}) and audio ({:?}) with high quality (CRF 20) -> {:?}",
+            v_path,
+            a_path,
+            output_path
+        );
 
-    // Try fast stream copy first
-    let mut command = std::process::Command::new(&ffmpeg_path);
-    command.args(&[
-        "-y",
-        "-i", video_path.to_str().unwrap(),
-        "-i", audio_path.to_str().unwrap(),
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-movflags", "+faststart",
-        "-shortest",
-        output_path.to_str().unwrap(),
-    ]);
-
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-
-    let result = command.output();
-    let success = match result {
-        Ok(output) if output.status.success() => true,
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log_warn!("Stream copy merge failed, attempting fallback transcoding: {}", stderr);
-            false
-        }
-        Err(e) => {
-            log_warn!("FFmpeg execution failed: {}", e);
-            false
-        }
-    };
-
-    if !success {
-        // Fallback: transcode video to H.264 ultrafast + AAC for universal compatibility
-        let mut fallback_cmd = std::process::Command::new(&ffmpeg_path);
-        fallback_cmd.args(&[
+        // Transcode meeting video (WebM) + audio into high quality, crisp MP4 (H.264 CRF 20 + AAC 192k)
+        let mut command = std::process::Command::new(&ffmpeg_path);
+        command.args(&[
             "-y",
-            "-i", video_path.to_str().unwrap(),
-            "-i", audio_path.to_str().unwrap(),
+            "-i", v_path.to_str().unwrap(),
+            "-i", a_path.to_str().unwrap(),
             "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-crf", "23",
+            "-preset", "faster",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac",
+            "-b:a", "192k",
             "-movflags", "+faststart",
             "-shortest",
             output_path.to_str().unwrap(),
@@ -184,18 +170,125 @@ pub async fn api_merge_meeting_video_and_audio(folder_path: String) -> Result<St
         {
             use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
-            fallback_cmd.creation_flags(CREATE_NO_WINDOW);
+            command.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let fallback_output = fallback_cmd.output().map_err(|e| format!("FFmpeg fallback failed: {}", e))?;
-        if !fallback_output.status.success() {
-            let stderr = String::from_utf8_lossy(&fallback_output.stderr);
-            log_error!("FFmpeg fallback merge failed: {}", stderr);
-            return Err(format!("FFmpeg merge failed: {}", stderr));
+        let result = command.output();
+        let success = match result {
+            Ok(output) if output.status.success() => true,
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                log_warn!("H.264 high-quality compression failed ({}), trying veryfast fallback...", stderr);
+                false
+            }
+            Err(e) => {
+                log_warn!("FFmpeg execution failed: {}", e);
+                false
+            }
+        };
+
+        if !success {
+            // Fallback: veryfast transcoding with high quality CRF 22
+            let mut fallback_cmd = std::process::Command::new(&ffmpeg_path);
+            fallback_cmd.args(&[
+                "-y",
+                "-i", v_path.to_str().unwrap(),
+                "-i", a_path.to_str().unwrap(),
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "22",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                "-shortest",
+                output_path.to_str().unwrap(),
+            ]);
+
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                fallback_cmd.creation_flags(CREATE_NO_WINDOW);
+            }
+
+            let fallback_output = fallback_cmd.output().map_err(|e| format!("FFmpeg fallback failed: {}", e))?;
+            if !fallback_output.status.success() {
+                let stderr = String::from_utf8_lossy(&fallback_output.stderr);
+                log_error!("FFmpeg fallback merge failed: {}", stderr);
+                return Err(format!("FFmpeg merge failed: {}", stderr));
+            }
         }
+    } else if let (None, Some(a_path)) = (&video_path, &audio_path) {
+        log_info!(
+            "🎧 Packaging audio-only meeting ({:?}) into streaming MP4 -> {:?}",
+            a_path,
+            output_path
+        );
+
+        // Audio-only: generate an MP4 with a dark slate backdrop so Google Drive and players stream it natively
+        let mut command = std::process::Command::new(&ffmpeg_path);
+        command.args(&[
+            "-y",
+            "-f", "lavfi",
+            "-i", "color=c=0x0f172a:s=1280x720:r=1",
+            "-i", a_path.to_str().unwrap(),
+            "-c:v", "libx264",
+            "-tune", "stillimage",
+            "-preset", "ultrafast",
+            "-crf", "28",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            "-shortest",
+            output_path.to_str().unwrap(),
+        ]);
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = command.output().map_err(|e| format!("FFmpeg audio-only packaging failed: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log_error!("FFmpeg audio-only packaging failed: {}", stderr);
+            return Err(format!("FFmpeg audio packaging failed: {}", stderr));
+        }
+    } else if let (Some(v_path), None) = (&video_path, &audio_path) {
+        log_info!("📹 Transcoding video-only meeting ({:?}) with CRF 20 -> {:?}", v_path, output_path);
+        let mut command = std::process::Command::new(&ffmpeg_path);
+        command.args(&[
+            "-y",
+            "-i", v_path.to_str().unwrap(),
+            "-c:v", "libx264",
+            "-preset", "faster",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            output_path.to_str().unwrap(),
+        ]);
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = command.output().map_err(|e| format!("FFmpeg video-only transcoding failed: {}", e))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("FFmpeg video transcoding failed: {}", stderr));
+        }
+    } else {
+        return Err("No audio or video recording found in meeting folder".to_string());
     }
 
-    log_info!("✅ Successfully merged meeting video with audio: {:?}", output_path);
+    log_info!("✅ Successfully prepared meeting video file: {:?}", output_path);
     Ok(output_path.to_string_lossy().to_string())
 }
 

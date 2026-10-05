@@ -800,6 +800,8 @@ pub fn run() {
             google_drive::api_google_drive_get_status,
             google_drive::api_google_drive_start_auth,
             google_drive::api_google_drive_disconnect,
+            google_drive::api_google_drive_pause_upload,
+            google_drive::api_google_drive_resume_upload,
             google_drive::api_start_background_media_processing_and_upload,
             google_drive::api_retry_meeting_drive_upload,
             // Follow-up / Rescheduling extraction

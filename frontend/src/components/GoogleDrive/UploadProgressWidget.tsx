@@ -8,13 +8,23 @@ import {
   CheckCircle2,
   AlertCircle,
   ExternalLink,
-  X,
-  RotateCcw,
   Sparkles,
+  Pause,
+  Play,
+  RotateCcw,
+  X,
 } from 'lucide-react';
 
 export function UploadProgressWidget() {
-  const { activeUploads, connectDrive, retryUpload } = useGoogleDriveUpload();
+  const {
+    activeUploads,
+    driveStatus,
+    connectDrive,
+    pauseUpload,
+    resumeUpload,
+    retryUpload,
+    dismissUpload,
+  } = useGoogleDriveUpload();
   const uploadsList = Object.values(activeUploads);
 
   if (uploadsList.length === 0) {
@@ -26,9 +36,11 @@ export function UploadProgressWidget() {
       {uploadsList.map((job) => {
         const isMerging = job.status === 'merging';
         const isUploading = job.status === 'uploading' || job.status === 'checking_drive';
+        const isPaused = job.status === 'paused';
         const isCompleted = job.status === 'completed';
         const isNotConnected = job.status === 'not_connected';
         const isError = job.status === 'error';
+        const isDriveLinked = Boolean(driveStatus?.is_connected);
 
         return (
           <div
@@ -42,8 +54,12 @@ export function UploadProgressWidget() {
                   ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
                   : isError
                   ? 'bg-gradient-to-r from-rose-500 to-red-400'
+                  : isPaused
+                  ? 'bg-gradient-to-r from-amber-400 to-orange-400'
                   : isNotConnected
-                  ? 'bg-gradient-to-r from-amber-500 to-orange-400'
+                  ? isDriveLinked
+                    ? 'bg-gradient-to-r from-blue-500 to-indigo-500'
+                    : 'bg-gradient-to-r from-amber-500 to-orange-400'
                   : 'bg-gradient-to-r from-blue-600 via-indigo-500 to-purple-500 animate-pulse'
               }`}
             />
@@ -56,8 +72,12 @@ export function UploadProgressWidget() {
                     ? 'bg-emerald-50 text-emerald-600'
                     : isError
                     ? 'bg-rose-50 text-rose-600'
-                    : isNotConnected
+                    : isPaused
                     ? 'bg-amber-50 text-amber-600'
+                    : isNotConnected
+                    ? isDriveLinked
+                      ? 'bg-blue-50 text-blue-600'
+                      : 'bg-amber-50 text-amber-600'
                     : 'bg-blue-50 text-blue-600'
                 }`}
               >
@@ -65,8 +85,10 @@ export function UploadProgressWidget() {
                   <CheckCircle2 size={20} className="stroke-[2.5]" />
                 ) : isError ? (
                   <AlertCircle size={20} />
+                ) : isPaused ? (
+                  <Pause size={20} className="stroke-[2.5]" />
                 ) : isNotConnected ? (
-                  <Cloud size={20} />
+                  isDriveLinked ? <CloudUpload size={20} /> : <Cloud size={20} />
                 ) : (
                   <CloudUpload size={20} className="animate-bounce" />
                 )}
@@ -80,37 +102,85 @@ export function UploadProgressWidget() {
                       ? 'Optimizing Video...'
                       : isUploading
                       ? 'Uploading to Google Drive'
+                      : isPaused
+                      ? 'Upload Paused'
                       : isCompleted
                       ? 'Uploaded to Google Drive'
                       : isNotConnected
-                      ? 'Connect Google Drive'
+                      ? isDriveLinked
+                        ? 'Ready to Sync'
+                        : 'Connect Google Drive'
                       : 'Upload Failed'}
                   </h4>
 
-                  {isUploading && (
-                    <span className="text-[11px] font-mono font-semibold text-blue-600">
-                      {job.progress}%
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {isUploading && (
+                      <span className="text-[11px] font-mono font-semibold text-blue-600">
+                        {job.progress}%
+                      </span>
+                    )}
+
+                    {/* Pause Button */}
+                    {isUploading && (
+                      <button
+                        onClick={() => pauseUpload(job.meeting_id)}
+                        className="p-1 rounded-md text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors cursor-pointer"
+                        title="Pause Upload"
+                      >
+                        <Pause size={12} />
+                      </button>
+                    )}
+
+                    {/* Resume Button */}
+                    {isPaused && (
+                      <button
+                        onClick={() => resumeUpload(job.meeting_id, '')}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500 text-white hover:bg-amber-600 active:scale-95 transition-all shadow-xs cursor-pointer"
+                        title="Resume Upload"
+                      >
+                        <Play size={10} fill="currentColor" />
+                        <span>Resume</span>
+                      </button>
+                    )}
+
+                    {/* Dismiss Button (always available when not uploading or merging) */}
+                    {(!isUploading && !isMerging) && (
+                      <button
+                        onClick={() => dismissUpload(job.meeting_id)}
+                        className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                        title="Dismiss notification"
+                      >
+                        <X size={13} />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <p className="mt-0.5 text-[11px] text-gray-500 leading-snug truncate">
                   {isMerging
-                    ? 'Merging meeting video and audio tracks'
+                    ? 'Transcoding H.264 & syncing audio tracks'
                     : isUploading
                     ? 'Streaming chunks to cloud storage...'
+                    : isPaused
+                    ? 'Upload halted · Click resume to continue'
                     : isCompleted
                     ? 'Team members can now stream recording'
                     : isNotConnected
-                    ? 'Sync recordings to cloud for project access'
+                    ? isDriveLinked
+                      ? 'Drive connected. Click below to start sync.'
+                      : 'Sync recordings to cloud for project access'
                     : job.error || 'Failed to upload video'}
                 </p>
 
                 {/* Progress bar for active uploads */}
-                {(isUploading || isMerging) && (
+                {(isUploading || isMerging || isPaused) && (
                   <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 transition-all duration-300"
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        isPaused
+                          ? 'bg-amber-400'
+                          : 'bg-gradient-to-r from-blue-600 to-indigo-600'
+                      }`}
                       style={{ width: `${Math.max(5, job.progress)}%` }}
                     />
                   </div>
@@ -119,12 +189,40 @@ export function UploadProgressWidget() {
                 {/* Actions */}
                 {isNotConnected && (
                   <div className="mt-2.5 flex items-center gap-2">
+                    {isDriveLinked ? (
+                      <button
+                        onClick={() => retryUpload(job.meeting_id, '')}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all shadow-xs cursor-pointer"
+                      >
+                        <CloudUpload size={12} />
+                        <span>Upload to Drive</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => connectDrive()}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all shadow-xs cursor-pointer"
+                      >
+                        <Sparkles size={12} />
+                        <span>Connect Drive</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {isError && (
+                  <div className="mt-2.5 flex items-center gap-2">
                     <button
-                      onClick={() => connectDrive()}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 active:scale-95 transition-all shadow-xs cursor-pointer"
+                      onClick={() => retryUpload(job.meeting_id, '')}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 active:scale-95 transition-all cursor-pointer"
                     >
-                      <Sparkles size={12} />
-                      <span>Connect Drive</span>
+                      <RotateCcw size={12} />
+                      <span>Retry Upload</span>
+                    </button>
+                    <button
+                      onClick={() => dismissUpload(job.meeting_id)}
+                      className="px-2 py-1 rounded-lg text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-all cursor-pointer"
+                    >
+                      Dismiss
                     </button>
                   </div>
                 )}

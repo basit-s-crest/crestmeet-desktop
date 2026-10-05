@@ -1,12 +1,17 @@
 use log::{error as log_error, info as log_info, warn as log_warn};
+use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Runtime, State};
 use tauri_plugin_store::StoreExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::database::repositories::meeting::MeetingsRepository;
 use crate::state::AppState;
@@ -14,6 +19,16 @@ use crate::state::AppState;
 const REDIRECT_URI: &str = "http://localhost:3000/api/calendar/auth/callback";
 const SCOPES: &str = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email";
 const STORE_FILENAME: &str = "google_drive.json";
+
+/// Active background upload controls for pausing and resuming
+#[derive(Clone)]
+pub struct UploadJobControl {
+    pub is_paused: Arc<AtomicBool>,
+    pub is_cancelled: Arc<AtomicBool>,
+}
+
+static UPLOAD_JOBS: Lazy<TokioMutex<HashMap<String, UploadJobControl>>> =
+    Lazy::new(|| TokioMutex::new(HashMap::new()));
 
 fn get_env_var(key: &str) -> Option<String> {
     if let Ok(val) = std::env::var(key) {
@@ -43,14 +58,50 @@ fn get_env_var(key: &str) -> Option<String> {
     None
 }
 
-fn get_client_id() -> Result<String, String> {
+/// Resolves Google Client ID with multi-organization support.
+/// If email matches GOOGLE_ORG2_DOMAINS and GOOGLE_CLIENT_ID_ORG2 is set, uses Org 2 credentials.
+/// Otherwise defaults to GOOGLE_CLIENT_ID (which supports both orgs when OAuth consent screen is External).
+fn get_client_id(email_hint: Option<&str>) -> Result<String, String> {
+    if let Some(email) = email_hint {
+        if let Some(org2_domains) = get_env_var("GOOGLE_ORG2_DOMAINS") {
+            let email_domain = email.split('@').nth(1).unwrap_or("").trim().to_lowercase();
+            let matches_org2 = org2_domains
+                .split(',')
+                .any(|d| d.trim().to_lowercase() == email_domain);
+            if matches_org2 {
+                if let Some(cid2) = get_env_var("GOOGLE_CLIENT_ID_ORG2") {
+                    if !cid2.trim().is_empty() {
+                        return Ok(cid2);
+                    }
+                }
+            }
+        }
+    }
+
     get_env_var("GOOGLE_CLIENT_ID")
         .or_else(|| option_env!("GOOGLE_CLIENT_ID").map(String::from))
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "Google OAuth Client ID is not configured. Please set GOOGLE_CLIENT_ID in your environment or .env file.".to_string())
 }
 
-fn get_client_secret() -> Result<String, String> {
+/// Resolves Google Client Secret with multi-organization support.
+fn get_client_secret(email_hint: Option<&str>) -> Result<String, String> {
+    if let Some(email) = email_hint {
+        if let Some(org2_domains) = get_env_var("GOOGLE_ORG2_DOMAINS") {
+            let email_domain = email.split('@').nth(1).unwrap_or("").trim().to_lowercase();
+            let matches_org2 = org2_domains
+                .split(',')
+                .any(|d| d.trim().to_lowercase() == email_domain);
+            if matches_org2 {
+                if let Some(sec2) = get_env_var("GOOGLE_CLIENT_SECRET_ORG2") {
+                    if !sec2.trim().is_empty() {
+                        return Ok(sec2);
+                    }
+                }
+            }
+        }
+    }
+
     get_env_var("GOOGLE_CLIENT_SECRET")
         .or_else(|| option_env!("GOOGLE_CLIENT_SECRET").map(String::from))
         .filter(|s| !s.trim().is_empty())
@@ -75,7 +126,7 @@ pub struct GoogleDriveStatus {
 pub struct UploadProgressPayload {
     pub meeting_id: String,
     pub progress: u32,
-    pub status: String, // "idle", "merging", "uploading", "completed", "error", "not_connected"
+    pub status: String, // "idle", "merging", "checking_drive", "uploading", "paused", "completed", "error", "not_connected"
     pub error: Option<String>,
     pub video_url: Option<String>,
     pub drive_file_id: Option<String>,
@@ -125,8 +176,16 @@ fn open_browser(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn load_tokens<R: Runtime>(app: &AppHandle<R>) -> Option<GoogleDriveTokens> {
+fn load_tokens<R: Runtime>(app: &AppHandle<R>, email_hint: Option<&str>) -> Option<GoogleDriveTokens> {
     let store = app.store(STORE_FILENAME).ok()?;
+    if let Some(email) = email_hint {
+        let account_key = format!("account:{}", email.trim().to_lowercase());
+        if let Some(val) = store.get(&account_key) {
+            if let Ok(tok) = serde_json::from_value::<GoogleDriveTokens>(val) {
+                return Some(tok);
+            }
+        }
+    }
     let val = store.get("tokens")?;
     serde_json::from_value::<GoogleDriveTokens>(val).ok()
 }
@@ -136,15 +195,21 @@ fn save_tokens<R: Runtime>(app: &AppHandle<R>, tokens: &GoogleDriveTokens) -> Re
         .store(STORE_FILENAME)
         .map_err(|e| format!("Failed to open store: {}", e))?;
     let val = serde_json::to_value(tokens).map_err(|e| format!("Failed to serialize tokens: {}", e))?;
-    store.set("tokens", val);
+    store.set("tokens", val.clone());
+    if let Some(ref email) = tokens.user_email {
+        if !email.trim().is_empty() {
+            let account_key = format!("account:{}", email.trim().to_lowercase());
+            store.set(account_key, val);
+        }
+    }
     store
         .save()
         .map_err(|e| format!("Failed to save store to disk: {}", e))?;
     Ok(())
 }
 
-async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
-    let mut tokens = load_tokens(app).ok_or_else(|| "Google Drive is not connected".to_string())?;
+async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>, email_hint: Option<&str>) -> Result<String, String> {
+    let mut tokens = load_tokens(app, email_hint).ok_or_else(|| "Google Drive is not connected".to_string())?;
     let now = current_timestamp_secs();
 
     // If token has at least 60 seconds before expiration, reuse it
@@ -159,8 +224,9 @@ async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>) -> Result<String
         .as_ref()
         .ok_or_else(|| "No refresh token available; please reconnect Google Drive".to_string())?;
 
-    let client_id = get_client_id()?;
-    let client_secret = get_client_secret()?;
+    let effective_email = tokens.user_email.as_deref().or(email_hint);
+    let client_id = get_client_id(effective_email)?;
+    let client_secret = get_client_secret(effective_email)?;
 
     log_info!("Refreshing Google Drive access token...");
     let client = Client::new();
@@ -202,7 +268,7 @@ async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>) -> Result<String
 pub async fn api_google_drive_get_status<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<GoogleDriveStatus, String> {
-    if let Some(tokens) = load_tokens(&app) {
+    if let Some(tokens) = load_tokens(&app, None) {
         if !tokens.access_token.is_empty() {
             return Ok(GoogleDriveStatus {
                 is_connected: true,
@@ -231,9 +297,10 @@ pub async fn api_google_drive_disconnect<R: Runtime>(
 #[tauri::command]
 pub async fn api_google_drive_start_auth<R: Runtime>(
     app: AppHandle<R>,
+    user_email_hint: Option<String>,
 ) -> Result<GoogleDriveStatus, String> {
-    let client_id = get_client_id()?;
-    let client_secret = get_client_secret()?;
+    let client_id = get_client_id(user_email_hint.as_deref())?;
+    let client_secret = get_client_secret(user_email_hint.as_deref())?;
 
     log_info!("Starting Google Drive OAuth flow on loopback port 3000...");
 
@@ -379,15 +446,17 @@ pub async fn api_google_drive_start_auth<R: Runtime>(
 }
 
 /// Uploads a local video file to Google Drive using resumable upload in 5MB chunks.
+/// Supports pause and resume through `control`.
 /// Sets reader permission so team members can stream via preview URL.
 async fn upload_video_file_to_drive<F>(
     access_token: &str,
     file_path: &Path,
     meeting_id: &str,
+    control: UploadJobControl,
     mut on_progress: F,
 ) -> Result<(String, String), String>
 where
-    F: FnMut(u32),
+    F: FnMut(u32, &str),
 {
     let metadata = tokio::fs::metadata(file_path)
         .await
@@ -433,6 +502,27 @@ where
     let mut drive_file_id: Option<String> = None;
 
     while uploaded_bytes < file_size {
+        // Check if upload was cancelled
+        if control.is_cancelled.load(Ordering::SeqCst) {
+            return Err("Upload cancelled".to_string());
+        }
+
+        // Check if upload is paused
+        if control.is_paused.load(Ordering::SeqCst) {
+            log_info!("⏸️ Upload for meeting {} is paused at {} bytes", meeting_id, uploaded_bytes);
+            let percent = ((uploaded_bytes as f64 / file_size as f64) * 70.0) as u32 + 25;
+            on_progress(percent, "paused");
+
+            while control.is_paused.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                if control.is_cancelled.load(Ordering::SeqCst) {
+                    return Err("Upload cancelled".to_string());
+                }
+            }
+            log_info!("▶️ Upload for meeting {} resumed!", meeting_id);
+            on_progress(percent, "uploading");
+        }
+
         let to_read = std::cmp::min(chunk_size as u64, file_size - uploaded_bytes) as usize;
         file.read_exact(&mut buffer[..to_read])
             .await
@@ -455,7 +545,7 @@ where
 
         uploaded_bytes += to_read as u64;
         let percent = ((uploaded_bytes as f64 / file_size as f64) * 70.0) as u32 + 25;
-        on_progress(percent);
+        on_progress(percent, "uploading");
 
         if put_resp.status().is_success() {
             let resp_json: serde_json::Value = put_resp.json().await.unwrap_or_default();
@@ -467,7 +557,7 @@ where
 
     let file_id = drive_file_id.ok_or_else(|| "Drive upload finished but no file ID was returned".to_string())?;
 
-    // Set permission to anyone with link as reader
+    // Set permission to anyone with link as reader so other org users / team members can stream
     let perm_resp = client
         .post(format!("https://www.googleapis.com/drive/v3/files/{}/permissions", file_id))
         .bearer_auth(access_token)
@@ -488,7 +578,129 @@ where
     Ok((file_id, preview_url))
 }
 
-/// Spawns background media processing (FFmpeg merge) and parallel Google Drive upload.
+/// Pauses an active Google Drive upload for a meeting.
+#[tauri::command]
+pub async fn api_google_drive_pause_upload<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<bool, String> {
+    log_info!("⏸️ Pausing upload for meeting {}", meeting_id);
+    let pool = state.db_manager.pool().clone();
+    let mid = meeting_id.clone();
+
+    let jobs = UPLOAD_JOBS.lock().await;
+    if let Some(ctrl) = jobs.get(&meeting_id) {
+        ctrl.is_paused.store(true, Ordering::SeqCst);
+        let _ = MeetingsRepository::update_meeting_drive_info(&pool, &mid, None, None, "paused").await;
+        let _ = app.emit(
+            "meeting-upload-progress",
+            UploadProgressPayload {
+                meeting_id: meeting_id.clone(),
+                progress: 0,
+                status: "paused".to_string(),
+                error: None,
+                video_url: None,
+                drive_file_id: None,
+            },
+        );
+        Ok(true)
+    } else {
+        let _ = MeetingsRepository::update_meeting_drive_info(&pool, &mid, None, None, "paused").await;
+        let _ = app.emit(
+            "meeting-upload-progress",
+            UploadProgressPayload {
+                meeting_id: meeting_id.clone(),
+                progress: 0,
+                status: "paused".to_string(),
+                error: None,
+                video_url: None,
+                drive_file_id: None,
+            },
+        );
+        Ok(false)
+    }
+}
+
+/// Resumes a paused Google Drive upload for a meeting.
+#[tauri::command]
+pub async fn api_google_drive_resume_upload<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    meeting_id: String,
+    folder_path: String,
+) -> Result<bool, String> {
+    log_info!("▶️ Resuming upload for meeting {}", meeting_id);
+    {
+        let jobs = UPLOAD_JOBS.lock().await;
+        if let Some(ctrl) = jobs.get(&meeting_id) {
+            if ctrl.is_paused.load(Ordering::SeqCst) {
+                ctrl.is_paused.store(false, Ordering::SeqCst);
+                return Ok(true);
+            }
+        }
+    }
+
+    // If job was not in memory waiting, trigger background upload task
+    let _ = api_start_background_media_processing_and_upload(app, state, meeting_id, folder_path).await?;
+    Ok(true)
+}
+
+async fn find_meeting_recording_folder(meeting_id: &str) -> Option<PathBuf> {
+    let base_dir = crate::audio::recording_preferences::get_default_recordings_folder_path().await.ok()?;
+    let base_path = PathBuf::from(base_dir);
+    if !base_path.exists() {
+        return None;
+    }
+
+    let read_dir = std::fs::read_dir(&base_path).ok()?;
+    let clean_id = meeting_id.trim_start_matches("meeting-").trim();
+
+    let mut candidate_folders = Vec::new();
+
+    for entry in read_dir.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            // Check metadata.json inside
+            let meta_path = p.join("metadata.json");
+            if meta_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&meta_path) {
+                    if content.contains(meeting_id) || (!clean_id.is_empty() && content.contains(clean_id)) {
+                        return Some(p);
+                    }
+                }
+            }
+
+            // Check if folder name contains UUID
+            let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !clean_id.is_empty() && fname.contains(clean_id) {
+                return Some(p);
+            }
+
+            // Check if directory has media files
+            if p.join("meeting_video_merged.mp4").exists()
+                || p.join("meeting_video.webm").exists()
+                || p.join("audio.mp4").exists()
+            {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        candidate_folders.push((modified, p));
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by most recently modified first
+    candidate_folders.sort_by(|a, b| b.0.cmp(&a.0));
+    if let Some((_, path)) = candidate_folders.first() {
+        return Some(path.clone());
+    }
+
+    None
+}
+
+/// Spawns background media processing (FFmpeg H.264+AAC merge) and parallel Google Drive upload.
 /// Does not block caller, emits progress events to frontend.
 #[tauri::command]
 pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
@@ -501,6 +713,16 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
     let pool = state.db_manager.pool().clone();
     let meeting_id_clone = meeting_id.clone();
     let folder_path_clone = folder_path.clone();
+
+    // Create job control and register
+    let job_ctrl = UploadJobControl {
+        is_paused: Arc::new(AtomicBool::new(false)),
+        is_cancelled: Arc::new(AtomicBool::new(false)),
+    };
+    {
+        let mut jobs = UPLOAD_JOBS.lock().await;
+        jobs.insert(meeting_id_clone.clone(), job_ctrl.clone());
+    }
 
     tokio::spawn(async move {
         log_info!(
@@ -522,24 +744,78 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
 
         // Step 1: Video and Audio merge if necessary
         emit_update(10, "merging", None, None, None);
-        let folder = PathBuf::from(&folder_path_clone);
+
+        // Resolve recording folder: direct param -> DB metadata -> recordings dir scan
+        let mut effective_folder: Option<PathBuf> = None;
+        if !folder_path_clone.trim().is_empty() {
+            let p = PathBuf::from(&folder_path_clone);
+            if p.exists() {
+                effective_folder = Some(p);
+            }
+        }
+
+        if effective_folder.is_none() {
+            if let Ok(Some(meta)) = MeetingsRepository::get_meeting_metadata(&pool, &meeting_id_clone).await {
+                if let Some(ref db_path) = meta.folder_path {
+                    if !db_path.trim().is_empty() {
+                        let p = PathBuf::from(db_path);
+                        if p.exists() {
+                            effective_folder = Some(p);
+                        }
+                    }
+                }
+            }
+        }
+
+        if effective_folder.is_none() {
+            effective_folder = find_meeting_recording_folder(&meeting_id_clone).await;
+        }
+
+        let folder = match effective_folder {
+            Some(f) => f,
+            None => {
+                log_error!("Could not resolve recording folder for meeting {}", meeting_id_clone);
+                emit_update(0, "error", Some("Meeting recording folder not found on disk".to_string()), None, None);
+                let _ = MeetingsRepository::update_meeting_drive_info(&pool, &meeting_id_clone, None, None, "failed").await;
+                let mut jobs = UPLOAD_JOBS.lock().await;
+                jobs.remove(&meeting_id_clone);
+                return;
+            }
+        };
+
+        let folder_str = folder.to_string_lossy().to_string();
         let merged_video_path = folder.join("meeting_video_merged.mp4");
 
-        let video_target_path: PathBuf = if merged_video_path.exists() {
+        let video_target_path: PathBuf = if merged_video_path.exists() && merged_video_path.metadata().map(|m| m.len() > 0).unwrap_or(false) {
             merged_video_path
         } else {
             // Attempt FFmpeg merge
-            match crate::video::commands::api_merge_meeting_video_and_audio(folder_path_clone.clone()).await {
+            match crate::video::commands::api_merge_meeting_video_and_audio(folder_str.clone()).await {
                 Ok(path_str) => PathBuf::from(path_str),
                 Err(e) => {
-                    log_warn!("Merge warning: {}. Checking for raw webm...", e);
+                    log_warn!("Merge warning: {}. Checking for raw video or audio files...", e);
                     let raw_webm = folder.join("meeting_video.webm");
+                    let raw_mp4 = folder.join("meeting_video.mp4");
+                    let rec_webm = folder.join("recording.webm");
+                    let rec_mp4 = folder.join("recording.mp4");
+                    let audio_mp4 = folder.join("audio.mp4");
+
                     if raw_webm.exists() {
                         raw_webm
+                    } else if raw_mp4.exists() {
+                        raw_mp4
+                    } else if rec_webm.exists() {
+                        rec_webm
+                    } else if rec_mp4.exists() {
+                        rec_mp4
+                    } else if audio_mp4.exists() {
+                        audio_mp4
                     } else {
-                        log_error!("No video file found in folder {}", folder_path_clone);
-                        emit_update(0, "error", Some("No video file found".to_string()), None, None);
+                        log_error!("No video or audio file found in folder {}", folder_str);
+                        emit_update(0, "error", Some("No video or audio file found".to_string()), None, None);
                         let _ = MeetingsRepository::update_meeting_drive_info(&pool, &meeting_id_clone, None, None, "failed").await;
+                        let mut jobs = UPLOAD_JOBS.lock().await;
+                        jobs.remove(&meeting_id_clone);
                         return;
                     }
                 }
@@ -549,12 +825,14 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
         emit_update(20, "checking_drive", None, None, None);
 
         // Step 2: Check Google Drive access
-        let access_token = match get_valid_access_token(&app_handle).await {
+        let access_token = match get_valid_access_token(&app_handle, None).await {
             Ok(token) => token,
             Err(e) => {
                 log_info!("Google Drive not connected or expired ({}). Keeping local video.", e);
                 emit_update(0, "not_connected", Some(e), None, None);
                 let _ = MeetingsRepository::update_meeting_drive_info(&pool, &meeting_id_clone, None, None, "local_only").await;
+                let mut jobs = UPLOAD_JOBS.lock().await;
+                jobs.remove(&meeting_id_clone);
                 return;
             }
         };
@@ -568,13 +846,14 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
             &access_token,
             &video_target_path,
             &meeting_id_clone,
-            move |pct| {
+            job_ctrl,
+            move |pct, status| {
                 let _ = app_handle_for_progress.emit(
                     "meeting-upload-progress",
                     UploadProgressPayload {
                         meeting_id: meeting_id_for_progress.clone(),
                         progress: pct,
-                        status: "uploading".to_string(),
+                        status: status.to_string(),
                         error: None,
                         video_url: None,
                         drive_file_id: None,
@@ -599,19 +878,26 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
                 emit_update(100, "completed", None, Some(preview_url), Some(file_id));
             }
             Err(err) => {
-                log_error!("❌ Drive upload failed for meeting {}: {}", meeting_id_clone, err);
-                let _ = MeetingsRepository::update_meeting_drive_info(
-                    &pool,
-                    &meeting_id_clone,
-                    None,
-                    None,
-                    "failed",
-                )
-                .await;
-
-                emit_update(0, "error", Some(err), None, None);
+                if err == "Upload cancelled" {
+                    log_info!("Upload cancelled for meeting {}", meeting_id_clone);
+                } else {
+                    log_error!("❌ Drive upload failed for meeting {}: {}", meeting_id_clone, err);
+                    let _ = MeetingsRepository::update_meeting_drive_info(
+                        &pool,
+                        &meeting_id_clone,
+                        None,
+                        None,
+                        "failed",
+                    )
+                    .await;
+                    emit_update(0, "error", Some(err), None, None);
+                }
             }
         }
+
+        // Clean up from active jobs
+        let mut jobs = UPLOAD_JOBS.lock().await;
+        jobs.remove(&meeting_id_clone);
     });
 
     Ok("Background media processing started".to_string())

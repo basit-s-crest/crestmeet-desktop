@@ -36,6 +36,16 @@ pub struct Meeting {
     pub updated_at: String,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub has_video: bool,
+    #[serde(default)]
+    pub video_url: Option<String>,
+    #[serde(default)]
+    pub drive_file_id: Option<String>,
+    #[serde(default)]
+    pub upload_status: Option<String>,
+    #[serde(default)]
+    pub folder_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -384,12 +394,31 @@ pub async fn api_get_meetings<R: Runtime>(
 
             let result: Vec<Meeting> = meeting_models
                 .into_iter()
-                .map(|m| Meeting {
-                    id: m.id,
-                    title: m.title,
-                    created_at: m.created_at.0.to_rfc3339(),
-                    updated_at: m.updated_at.0.to_rfc3339(),
-                    project_id: m.project_id.map(|u| u.to_string()),
+                .map(|m| {
+                    let has_video = if m.has_video {
+                        true
+                    } else if let Some(ref fp) = m.folder_path {
+                        let path = std::path::Path::new(fp);
+                        path.join("meeting_video.webm").exists()
+                            || path.join("meeting_video_merged.mp4").exists()
+                            || path.join("meeting_video.mp4").exists()
+                            || path.join("recording.webm").exists()
+                    } else {
+                        false
+                    };
+
+                    Meeting {
+                        id: m.id,
+                        title: m.title,
+                        created_at: m.created_at.0.to_rfc3339(),
+                        updated_at: m.updated_at.0.to_rfc3339(),
+                        project_id: m.project_id.map(|u| u.to_string()),
+                        has_video,
+                        video_url: m.video_url,
+                        drive_file_id: m.drive_file_id,
+                        upload_status: m.upload_status,
+                        folder_path: m.folder_path,
+                    }
                 })
                 .collect();
             Ok(result)

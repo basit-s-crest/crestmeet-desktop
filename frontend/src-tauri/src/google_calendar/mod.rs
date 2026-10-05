@@ -39,14 +39,46 @@ fn get_env_var(key: &str) -> Option<String> {
     None
 }
 
-fn get_client_id() -> Result<String, String> {
+fn get_client_id(email_hint: Option<&str>) -> Result<String, String> {
+    if let Some(email) = email_hint {
+        if let Some(org2_domains) = get_env_var("GOOGLE_ORG2_DOMAINS") {
+            let email_domain = email.split('@').nth(1).unwrap_or("").trim().to_lowercase();
+            let matches_org2 = org2_domains
+                .split(',')
+                .any(|d| d.trim().to_lowercase() == email_domain);
+            if matches_org2 {
+                if let Some(cid2) = get_env_var("GOOGLE_CLIENT_ID_ORG2") {
+                    if !cid2.trim().is_empty() {
+                        return Ok(cid2);
+                    }
+                }
+            }
+        }
+    }
+
     get_env_var("GOOGLE_CLIENT_ID")
         .or_else(|| option_env!("GOOGLE_CLIENT_ID").map(String::from))
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "Google OAuth Client ID is not configured. Please set GOOGLE_CLIENT_ID in your environment or .env file.".to_string())
 }
 
-fn get_client_secret() -> Result<String, String> {
+fn get_client_secret(email_hint: Option<&str>) -> Result<String, String> {
+    if let Some(email) = email_hint {
+        if let Some(org2_domains) = get_env_var("GOOGLE_ORG2_DOMAINS") {
+            let email_domain = email.split('@').nth(1).unwrap_or("").trim().to_lowercase();
+            let matches_org2 = org2_domains
+                .split(',')
+                .any(|d| d.trim().to_lowercase() == email_domain);
+            if matches_org2 {
+                if let Some(sec2) = get_env_var("GOOGLE_CLIENT_SECRET_ORG2") {
+                    if !sec2.trim().is_empty() {
+                        return Ok(sec2);
+                    }
+                }
+            }
+        }
+    }
+
     get_env_var("GOOGLE_CLIENT_SECRET")
         .or_else(|| option_env!("GOOGLE_CLIENT_SECRET").map(String::from))
         .filter(|s| !s.trim().is_empty())
@@ -129,8 +161,16 @@ fn open_browser(url: &str) -> Result<(), String> {
 }
 
 /// Load tokens from the store
-fn load_tokens<R: Runtime>(app: &AppHandle<R>) -> Option<GoogleCalendarTokens> {
+fn load_tokens<R: Runtime>(app: &AppHandle<R>, email_hint: Option<&str>) -> Option<GoogleCalendarTokens> {
     let store = app.store(STORE_FILENAME).ok()?;
+    if let Some(email) = email_hint {
+        let account_key = format!("account:{}", email.trim().to_lowercase());
+        if let Some(val) = store.get(&account_key) {
+            if let Ok(tok) = serde_json::from_value::<GoogleCalendarTokens>(val) {
+                return Some(tok);
+            }
+        }
+    }
     let val = store.get("tokens")?;
     serde_json::from_value::<GoogleCalendarTokens>(val).ok()
 }
@@ -141,7 +181,13 @@ fn save_tokens<R: Runtime>(app: &AppHandle<R>, tokens: &GoogleCalendarTokens) ->
         .store(STORE_FILENAME)
         .map_err(|e| format!("Failed to open store: {}", e))?;
     let val = serde_json::to_value(tokens).map_err(|e| format!("Failed to serialize tokens: {}", e))?;
-    store.set("tokens", val);
+    store.set("tokens", val.clone());
+    if let Some(ref email) = tokens.user_email {
+        if !email.trim().is_empty() {
+            let account_key = format!("account:{}", email.trim().to_lowercase());
+            store.set(account_key, val);
+        }
+    }
     store
         .save()
         .map_err(|e| format!("Failed to save store to disk: {}", e))?;
@@ -149,8 +195,8 @@ fn save_tokens<R: Runtime>(app: &AppHandle<R>, tokens: &GoogleCalendarTokens) ->
 }
 
 /// Refresh the access token using refresh_token if expired or close to expiry
-async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> {
-    let mut tokens = load_tokens(app).ok_or_else(|| "Google Calendar is not connected".to_string())?;
+async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>, email_hint: Option<&str>) -> Result<String, String> {
+    let mut tokens = load_tokens(app, email_hint).ok_or_else(|| "Google Calendar is not connected".to_string())?;
     let now = current_timestamp_secs();
 
     // If token has at least 60 seconds before expiration, use it
@@ -165,8 +211,9 @@ async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>) -> Result<String
         .as_ref()
         .ok_or_else(|| "No refresh token available; please reconnect Google Calendar".to_string())?;
 
-    let client_id = get_client_id()?;
-    let client_secret = get_client_secret()?;
+    let effective_email = tokens.user_email.as_deref().or(email_hint);
+    let client_id = get_client_id(effective_email)?;
+    let client_secret = get_client_secret(effective_email)?;
 
     info!("Refreshing Google Calendar access token...");
     let client = Client::new();
@@ -208,7 +255,7 @@ async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>) -> Result<String
 pub async fn api_google_calendar_get_status<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<GoogleCalendarStatus, String> {
-    if let Some(tokens) = load_tokens(&app) {
+    if let Some(tokens) = load_tokens(&app, None) {
         if !tokens.access_token.is_empty() {
             return Ok(GoogleCalendarStatus {
                 is_connected: true,
@@ -238,8 +285,8 @@ pub async fn api_google_calendar_disconnect<R: Runtime>(
 pub async fn api_google_calendar_start_auth<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<GoogleCalendarStatus, String> {
-    let client_id = get_client_id()?;
-    let client_secret = get_client_secret()?;
+    let client_id = get_client_id(None)?;
+    let client_secret = get_client_secret(None)?;
 
     info!("Starting Google Calendar OAuth flow on loopback port 3000...");
 
@@ -396,7 +443,7 @@ pub async fn api_google_calendar_create_event<R: Runtime>(
     app: AppHandle<R>,
     payload: CalendarEventPayload,
 ) -> Result<CreateEventResponse, String> {
-    let access_token = get_valid_access_token(&app).await?;
+    let access_token = get_valid_access_token(&app, None).await?;
     let client = Client::new();
 
     let mut body = serde_json::json!({

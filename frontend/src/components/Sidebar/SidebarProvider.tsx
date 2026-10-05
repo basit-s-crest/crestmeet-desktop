@@ -22,6 +22,11 @@ export interface CurrentMeeting {
   title: string;
   created_at?: string;
   project_id?: string;
+  has_video?: boolean;
+  video_url?: string;
+  drive_file_id?: string;
+  upload_status?: string;
+  folder_path?: string;
 }
 
 // Search result type for transcript search
@@ -119,6 +124,11 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
             title: meeting.title,
             created_at: meeting.created_at,
             project_id: meeting.project_id,
+            has_video: meeting.has_video,
+            video_url: meeting.video_url,
+            drive_file_id: meeting.drive_file_id,
+            upload_status: meeting.upload_status,
+            folder_path: meeting.folder_path,
           }));
           setMeetings(transformedMeetings);
         }

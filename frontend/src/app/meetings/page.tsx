@@ -28,10 +28,15 @@ import {
   RotateCcw,
   FileText,
   LoaderIcon,
+  Check,
+  CloudUpload,
+  Play,
+  Loader2,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useSidebar, CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
 import { useAuth } from '@/contexts/AuthContext';
+import { useGoogleDriveUpload } from '@/contexts/GoogleDriveUploadContext';
 import { useProject } from '@/contexts/ProjectContext';
 import { ProjectWithRole, ProjectRole } from '@/types/project';
 import {
@@ -46,6 +51,8 @@ import {
   cleanMeetingTitle,
 } from '@/lib/dateUtils';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { UploadProgressPayload } from '@/services/googleDriveService';
 import { toast } from 'sonner';
 import { ConfirmationModal } from '@/components/ConfirmationModel/confirmation-modal';
 import {
@@ -87,6 +94,7 @@ export default function MeetingsPage() {
   const { meetings, setMeetings, setCurrentMeeting, isLoadingMeetings } = useSidebar();
   const { user } = useAuth();
   const { projects, activeProject, switchProject, archiveProject, deleteProject } = useProject();
+  const { activeUploads, syncedMeetings, retryUpload, pauseUpload, resumeUpload } = useGoogleDriveUpload();
 
   // Selected project for drill-down view (null = viewing projects overview)
   const [selectedProject, setSelectedProject] = useState<ProjectWithRole | null>(null);
@@ -95,6 +103,36 @@ export default function MeetingsPage() {
   const [projectMeetings, setProjectMeetings] = useState<CurrentMeeting[]>([]);
   const [isLoadingProjectMeetings, setIsLoadingProjectMeetings] = useState(false);
   const prevActiveProjectIdRef = useRef<string | undefined>(activeProject?.id);
+
+  // Listen to meeting upload completion to update local meeting records immediately
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<UploadProgressPayload>('meeting-upload-progress', (event) => {
+      const payload = event.payload;
+      if (payload.status === 'completed' && payload.drive_file_id) {
+        const fileId = payload.drive_file_id;
+        const videoUrl = payload.video_url || undefined;
+        setProjectMeetings((prev: CurrentMeeting[]) =>
+          prev.map((m: CurrentMeeting) =>
+            m.id === payload.meeting_id
+              ? {
+                  ...m,
+                  drive_file_id: fileId,
+                  video_url: videoUrl || m.video_url,
+                  upload_status: 'completed',
+                }
+              : m
+          )
+        );
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   // Overview tab: 'active' | 'archived'
   const [overviewTab, setOverviewTab] = useState<'active' | 'archived'>('active');
@@ -188,7 +226,7 @@ export default function MeetingsPage() {
     setIsLoadingProjectMeetings(true);
     setProjectMeetings([]); // Clear immediately so meetings from previous project never flash or linger
 
-    invoke<Array<{ id: string; title: string; created_at?: string; project_id?: string }>>(
+    invoke<Array<any>>(
       'api_get_meetings',
       { projectId: selectedProject.id }
     )
@@ -199,6 +237,11 @@ export default function MeetingsPage() {
             title: m.title,
             created_at: m.created_at,
             project_id: m.project_id,
+            has_video: m.has_video,
+            video_url: m.video_url,
+            drive_file_id: m.drive_file_id,
+            upload_status: m.upload_status,
+            folder_path: m.folder_path,
           }));
           setProjectMeetings(transformed);
         }
@@ -1024,7 +1067,23 @@ export default function MeetingsPage() {
                     <p className="text-xs text-gray-500 font-medium">Loading project meetings...</p>
                   </div>
                 ) : filteredAndSortedMeetings.length > 0 ? (
-                  filteredAndSortedMeetings.map((meeting) => (
+                  filteredAndSortedMeetings.map((meeting) => {
+                    const liveJob = activeUploads[meeting.id];
+                    const syncedInfo = syncedMeetings[meeting.id];
+                    const effectiveDriveFileId = liveJob?.drive_file_id || syncedInfo?.drive_file_id || meeting.drive_file_id;
+                    const effectiveUploadStatus = liveJob?.status || (syncedInfo || effectiveDriveFileId ? 'completed' : meeting.upload_status);
+                    const hasVideo = Boolean(meeting.has_video || effectiveDriveFileId || liveJob);
+
+                    const isUploaded = Boolean(
+                      effectiveDriveFileId && (effectiveUploadStatus === 'completed' || (effectiveUploadStatus as string) === 'synced')
+                    );
+                    const isUploading =
+                      effectiveUploadStatus === 'uploading' ||
+                      effectiveUploadStatus === 'merging' ||
+                      effectiveUploadStatus === 'checking_drive';
+                    const isPaused = effectiveUploadStatus === 'paused';
+
+                    return (
                     <div
                       key={meeting.id}
                       onClick={() => navigateToMeeting(meeting)}
@@ -1065,6 +1124,52 @@ export default function MeetingsPage() {
                           <Pencil className="w-4 h-4" />
                         </button>
 
+                        {/* Google Drive Upload State Button (between Rename and Delete) - only available for meetings with video recording */}
+                        {hasVideo && (
+                          <>
+                            {isUploaded ? (
+                              <div
+                                className="p-2 bg-white border border-gray-200/90 shadow-2xs rounded-lg text-emerald-600 flex items-center justify-center transition-all cursor-default"
+                                title="Uploaded to Google Drive"
+                              >
+                                <Check className="w-4 h-4 stroke-[2.5]" />
+                              </div>
+                            ) : isUploading ? (
+                              <button
+                                type="button"
+                                onClick={() => pauseUpload(meeting.id)}
+                                className="p-2 bg-blue-50 border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-100 transition-all flex items-center gap-1 cursor-pointer"
+                                title={`Syncing to Drive (${liveJob?.progress ?? 0}%) · Click to Pause`}
+                              >
+                                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                                {liveJob?.progress !== undefined && (
+                                  <span className="text-[10px] font-mono font-semibold">{liveJob.progress}%</span>
+                                )}
+                              </button>
+                            ) : isPaused ? (
+                              <button
+                                type="button"
+                                onClick={() => resumeUpload(meeting.id, meeting.folder_path || '')}
+                                className="p-2 bg-amber-50 border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-100 transition-all flex items-center gap-1 cursor-pointer shadow-xs animate-pulse"
+                                title="Resume Upload to Google Drive"
+                              >
+                                <Play className="w-3.5 h-3.5 fill-current" />
+                                <span className="text-[10px] font-semibold hidden md:inline">Resume</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => retryUpload(meeting.id, meeting.folder_path || '')}
+                                className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:scale-95 transition-all shadow-xs flex items-center gap-1.5 cursor-pointer ring-2 ring-blue-500/20"
+                                title="Upload to Google Drive"
+                              >
+                                <CloudUpload className="w-4 h-4" />
+                                <span className="text-[10px] font-semibold hidden md:inline">Upload</span>
+                              </button>
+                            )}
+                          </>
+                        )}
+
                         <button
                           type="button"
                           onClick={() =>
@@ -1090,7 +1195,8 @@ export default function MeetingsPage() {
                         </Button>
                       </div>
                     </div>
-                  ))
+                  );
+                })
                 ) : (
                   <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center shadow-2xs">
                     <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 mx-auto mb-3">
