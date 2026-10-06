@@ -1,19 +1,21 @@
 'use client';
 
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { Settings2, Mic, Database as DatabaseIcon, SparkleIcon } from 'lucide-react';
+import { Settings2, Mic, Database as DatabaseIcon, SparkleIcon, Cloud } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { motion } from 'framer-motion';
 import { TranscriptSettings } from '@/components/TranscriptSettings';
 import { RecordingSettings } from '@/components/RecordingSettings';
 import { PreferenceSettings } from '@/components/PreferenceSettings';
 import { SummaryModelSettings } from '@/components/SummaryModelSettings';
+import { IntegrationSettings } from '@/components/IntegrationSettings';
 import { useConfig } from '@/contexts/ConfigContext';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 // Tabs configuration (constant)
 const TABS = [
   { value: 'general', label: 'General', icon: Settings2 },
+  { value: 'integrations', label: 'Integrations', icon: Cloud },
   { value: 'recording', label: 'Recordings', icon: Mic },
   { value: 'Transcriptionmodels', label: 'Transcription', icon: DatabaseIcon },
   { value: 'summaryModels', label: 'Summary', icon: SparkleIcon },
@@ -103,6 +105,9 @@ export default function SettingsPage() {
 
             <TabsContent value="general">
               <PreferenceSettings />
+            </TabsContent>
+            <TabsContent value="integrations">
+              <IntegrationSettings />
             </TabsContent>
             <TabsContent value="recording">
               <RecordingSettings />

@@ -313,10 +313,9 @@ export default function MeetingsPage() {
   };
 
   // Active vs Archived project lists
-  const activeProjects = useMemo(
-    () => projects.filter((p) => !p.is_archived),
-    [projects]
-  );
+  const activeProjects = useMemo(() => {
+    return projects.filter((p) => !p.is_archived && (!p.is_personal || p.meeting_count > 0));
+  }, [projects]);
 
   const archivedProjects = useMemo(
     () => projects.filter((p) => p.is_archived),
@@ -594,7 +593,7 @@ export default function MeetingsPage() {
                     className="flex items-center gap-2 border-gray-200 bg-white text-gray-800 hover:bg-gray-50 rounded-xl text-sm font-medium shadow-2xs h-10 px-3.5"
                   >
                     <Users className="w-4 h-4 text-gray-600" />
-                    <span>Add Member</span>
+                    <span>{selectedProject.role === 'owner' ? 'Add Member' : 'Members'}</span>
                   </Button>
 
                   {(selectedProject.role === 'owner' || selectedProject.role === 'team_leader') && (
@@ -742,14 +741,26 @@ export default function MeetingsPage() {
                           </div>
 
                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            <button
-                              type="button"
-                              onClick={() => setMembersModalProject(project)}
-                              className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 hover:text-gray-900 transition-colors"
-                              title="Manage Members"
-                            >
-                              <Users className="w-4 h-4" />
-                            </button>
+                            {project.role === 'owner' ? (
+                              <button
+                                type="button"
+                                onClick={() => setMembersModalProject(project)}
+                                className="p-1.5 hover:bg-gray-100 rounded-md text-gray-500 hover:text-gray-900 transition-colors"
+                                title="Manage Members"
+                              >
+                                <Users className="w-4 h-4" />
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setMembersModalProject(project)}
+                                className="flex items-center gap-1.5 px-2.5 py-1 hover:bg-gray-100 rounded-md text-xs font-medium text-gray-600 hover:text-gray-900 transition-colors border border-gray-200 shadow-2xs"
+                                title="View Members"
+                              >
+                                <Users className="w-3.5 h-3.5 text-gray-500" />
+                                <span>Members</span>
+                              </button>
+                            )}
                             {(project.role === 'owner' || project.role === 'team_leader') && (
                               <button
                                 type="button"

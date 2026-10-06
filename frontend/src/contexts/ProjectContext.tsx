@@ -162,9 +162,16 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const respondToInvitation = async (invitationId: string, accept: boolean): Promise<boolean> => {
     try {
+      const targetInv = invitations.find((inv) => inv.id === invitationId);
       const msg = await invitationService.respondToInvitation(invitationId, accept);
       toast.success(msg);
       await Promise.all([refreshInvitations(), refreshProjects()]);
+
+      // Automatically switch active project to the newly accepted project so user immediately sees all meetings
+      if (accept && targetInv?.project_id) {
+        await switchProject(targetInv.project_id);
+      }
+
       return true;
     } catch (err: any) {
       console.error('[ProjectContext] Respond to invitation error:', err);

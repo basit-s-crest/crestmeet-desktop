@@ -12,12 +12,6 @@ const SCOPES: &str = "https://www.googleapis.com/auth/calendar.events https://ww
 const STORE_FILENAME: &str = "google_calendar.json";
 
 fn get_env_var(key: &str) -> Option<String> {
-    if let Ok(val) = std::env::var(key) {
-        let trimmed = val.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
     for path in &[".env", "../.env", "../../.env", "frontend/.env"] {
         if let Ok(content) = std::fs::read_to_string(path) {
             for line in content.lines() {
@@ -34,6 +28,12 @@ fn get_env_var(key: &str) -> Option<String> {
                     }
                 }
             }
+        }
+    }
+    if let Ok(val) = std::env::var(key) {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
     None
@@ -274,7 +274,7 @@ pub async fn api_google_calendar_disconnect<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<(), String> {
     if let Ok(store) = app.store(STORE_FILENAME) {
-        store.delete("tokens");
+        store.clear();
         let _ = store.save();
     }
     info!("Google Calendar disconnected");

@@ -679,6 +679,7 @@ pub fn run() {
             api::api_save_meeting_title,
             api::api_save_transcript,
             api::open_meeting_folder,
+            api::api_check_folder_exists,
             api::test_backend_connection,
             api::debug_backend_connection,
             api::open_external_url,

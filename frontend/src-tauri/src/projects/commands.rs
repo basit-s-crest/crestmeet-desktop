@@ -42,14 +42,18 @@ pub async fn api_project_list(
             e.to_string()
         })?;
 
-    // Check or initialize active_project_id
+    // Check or initialize active_project_id - strictly ensure it belongs to the current user's projects!
     let mut active_lock = state.active_project_id.write().await;
-    if active_lock.is_none() {
-        if let Some(first) = projects.iter().find(|p| !p.is_archived) {
-            if let Ok(pid) = Uuid::from_str(&first.id) {
-                *active_lock = Some(pid);
-            }
-        }
+    let is_valid = match *active_lock {
+        Some(pid) => projects.iter().any(|p| p.id == pid.to_string()),
+        None => false,
+    };
+
+    if !is_valid {
+        *active_lock = projects
+            .iter()
+            .find(|p| !p.is_archived)
+            .and_then(|p| Uuid::from_str(&p.id).ok());
     }
 
     let active_str = active_lock.map(|u| u.to_string());
@@ -173,14 +177,11 @@ pub async fn api_project_delete(
 
     ProjectsRepository::delete_project(pool, user_id, pid).await?;
 
-    // If deleted project was active, reset active project to Personal
+    // If deleted project was active, reset active project to the first remaining project
     let mut active = state.active_project_id.write().await;
     if *active == Some(pid) {
-        if let Ok(personal) = ProjectsRepository::get_or_create_personal_project(pool, user_id).await {
-            *active = Some(personal.id);
-        } else {
-            *active = None;
-        }
+        let remaining = ProjectsRepository::get_user_projects(pool, user_id).await.unwrap_or_default();
+        *active = remaining.into_iter().find(|p| !p.is_archived).and_then(|p| Uuid::from_str(&p.id).ok());
     }
 
     Ok(true)

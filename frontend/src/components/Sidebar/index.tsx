@@ -315,20 +315,20 @@ const Sidebar: React.FC = () => {
               {/* Record Action Button */}
               <button
                 onClick={handleRecordingToggle}
-                className={`w-full flex items-center justify-center gap-2 px-3.5 py-2.5 text-sm font-medium rounded-xl transition-all shadow-sm ${
+                className={`w-full flex items-center justify-center gap-2 px-3.5 py-2.5 text-sm font-medium rounded-xl transition-all shadow-2xs ${
                   isRecording
-                    ? 'bg-red-500 text-white hover:bg-red-600'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 active:scale-[0.98]'
+                    ? 'bg-red-500 text-white hover:bg-red-600 shadow-sm'
+                    : 'bg-slate-100/90 hover:bg-slate-200 text-slate-700 border border-slate-200/80 active:scale-[0.98]'
                 }`}
               >
                 {isRecording ? (
                   <>
-                    <Square className="w-4 h-4" />
+                    <Square className="w-4 h-4 fill-white" />
                     <span>Recording...</span>
                   </>
                 ) : (
                   <>
-                    <Mic className="w-4 h-4" />
+                    <Mic className="w-4 h-4 text-red-500" />
                     <span>Start Recording</span>
                   </>
                 )}
@@ -338,25 +338,27 @@ const Sidebar: React.FC = () => {
               {betaFeatures.importAndRetranscribe && (
                 <button
                   onClick={() => openImportDialog()}
-                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition-colors border border-indigo-100/80"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-indigo-700 bg-indigo-50/80 hover:bg-indigo-100/80 rounded-xl transition-colors border border-indigo-100/90"
                 >
-                  <Upload className="w-4 h-4" />
+                  <Upload className="w-3.5 h-3.5" />
                   <span>Import Audio</span>
                 </button>
               )}
 
               {/* User Profile / Sign Out */}
               {mounted && user && (
-                <div className="w-full px-2.5 py-1.5 flex items-center justify-between text-xs bg-slate-50 rounded-xl border border-slate-200/70">
-                  <div className="flex items-center gap-1.5 truncate max-w-[140px]" title={user.email || ''}>
-                    <UserIcon className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                    <span className="truncate text-slate-700 font-medium">{user.email}</span>
+                <div className="w-full px-2.5 py-1.5 flex items-center justify-between text-xs bg-slate-50/80 rounded-xl border border-slate-200/70">
+                  <div className="flex items-center gap-2 truncate min-w-0" title={user.email || ''}>
+                    <div className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                      <UserIcon className="w-3 h-3" />
+                    </div>
+                    <span className="truncate text-slate-700 font-medium text-xs">{user.email}</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => signOut()}
                     title="Sign Out"
-                    className="p-1 hover:bg-rose-100 hover:text-rose-600 rounded-lg text-slate-400 transition-colors"
+                    className="p-1.5 hover:bg-rose-100 hover:text-rose-600 rounded-lg text-slate-400 transition-colors shrink-0 ml-1"
                   >
                     <LogOut className="w-3.5 h-3.5" />
                   </button>
@@ -364,9 +366,8 @@ const Sidebar: React.FC = () => {
               )}
 
               {/* About and version */}
-              <div className="pt-1 flex items-center justify-between px-1">
-                <Info isCollapsed={isCollapsed} />
-                <span className="text-[11px] text-slate-400 font-medium">v0.4.0</span>
+              <div className="pt-0.5">
+                <Info isCollapsed={isCollapsed} version="v0.4.0" />
               </div>
             </div>
           </>

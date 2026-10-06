@@ -31,12 +31,6 @@ static UPLOAD_JOBS: Lazy<TokioMutex<HashMap<String, UploadJobControl>>> =
     Lazy::new(|| TokioMutex::new(HashMap::new()));
 
 fn get_env_var(key: &str) -> Option<String> {
-    if let Ok(val) = std::env::var(key) {
-        let trimmed = val.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
     for path in &[".env", "../.env", "../../.env", "frontend/.env"] {
         if let Ok(content) = std::fs::read_to_string(path) {
             for line in content.lines() {
@@ -53,6 +47,12 @@ fn get_env_var(key: &str) -> Option<String> {
                     }
                 }
             }
+        }
+    }
+    if let Ok(val) = std::env::var(key) {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
     None
@@ -287,7 +287,7 @@ pub async fn api_google_drive_disconnect<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<(), String> {
     if let Ok(store) = app.store(STORE_FILENAME) {
-        store.delete("tokens");
+        store.clear();
         let _ = store.save();
     }
     log_info!("Google Drive disconnected");
@@ -445,8 +445,73 @@ pub async fn api_google_drive_start_auth<R: Runtime>(
     })
 }
 
+/// Finds or creates a dedicated "crestmeet" folder on the user's Google Drive.
+/// Returns the Drive folder ID.
+async fn get_or_create_crestmeet_folder(client: &Client, access_token: &str) -> Result<String, String> {
+    // 1. Search for existing non-trashed folder named "crestmeet"
+    let query = "name = 'crestmeet' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+    let search_resp = client
+        .get("https://www.googleapis.com/drive/v3/files")
+        .bearer_auth(access_token)
+        .query(&[
+            ("q", query),
+            ("fields", "files(id, name)"),
+            ("spaces", "drive"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Failed to search for 'crestmeet' folder: {}", e))?;
+
+    if search_resp.status().is_success() {
+        if let Ok(json_data) = search_resp.json::<serde_json::Value>().await {
+            if let Some(files) = json_data.get("files").and_then(|f| f.as_array()) {
+                if let Some(first_folder) = files.first() {
+                    if let Some(folder_id) = first_folder.get("id").and_then(|id| id.as_str()) {
+                        log_info!("📁 Found existing 'crestmeet' folder on Drive: {}", folder_id);
+                        return Ok(folder_id.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Not found or query empty: create the folder
+    log_info!("📁 'crestmeet' folder not found on Google Drive. Creating it now...");
+    let create_resp = client
+        .post("https://www.googleapis.com/drive/v3/files")
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({
+            "name": "crestmeet",
+            "mimeType": "application/vnd.google-apps.folder",
+            "description": "CrestMeet Meeting Recordings"
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to create 'crestmeet' folder: {}", e))?;
+
+    if !create_resp.status().is_success() {
+        let err_text = create_resp.text().await.unwrap_or_default();
+        return Err(format!("Failed to create 'crestmeet' folder on Drive: {}", err_text));
+    }
+
+    let create_json: serde_json::Value = create_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse created folder response: {}", e))?;
+
+    let folder_id = create_json
+        .get("id")
+        .and_then(|id| id.as_str())
+        .ok_or_else(|| "Google Drive did not return folder ID for created 'crestmeet' folder".to_string())?
+        .to_string();
+
+    log_info!("📁 Successfully created 'crestmeet' folder on Google Drive with ID: {}", folder_id);
+    Ok(folder_id)
+}
+
 /// Uploads a local video file to Google Drive using resumable upload in 5MB chunks.
 /// Supports pause and resume through `control`.
+/// Places file inside dedicated "crestmeet" folder.
 /// Sets reader permission so team members can stream via preview URL.
 async fn upload_video_file_to_drive<F>(
     access_token: &str,
@@ -468,15 +533,32 @@ where
 
     let client = Client::new();
 
+    // Find or create the dedicated "crestmeet" folder
+    let parent_folder_id = match get_or_create_crestmeet_folder(&client, access_token).await {
+        Ok(id) => {
+            log_info!("📁 Uploading meeting video to 'crestmeet' folder (ID: {})", id);
+            Some(id)
+        }
+        Err(e) => {
+            log_warn!("Could not get/create 'crestmeet' folder ({}), falling back to root Drive.", e);
+            None
+        }
+    };
+
+    let mut file_metadata = serde_json::json!({
+        "name": format!("CrestMeet_Meeting_{}.mp4", meeting_id),
+        "description": "Recorded with CrestMeet AI Meeting Assistant"
+    });
+    if let Some(ref fid) = parent_folder_id {
+        file_metadata["parents"] = serde_json::json!([fid]);
+    }
+
     let init_resp = client
         .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable")
         .bearer_auth(access_token)
         .header("X-Upload-Content-Type", "video/mp4")
         .header("X-Upload-Content-Length", file_size.to_string())
-        .json(&serde_json::json!({
-            "name": format!("CrestMeet_Meeting_{}.mp4", meeting_id),
-            "description": "Recorded with CrestMeet AI Meeting Assistant"
-        }))
+        .json(&file_metadata)
         .send()
         .await
         .map_err(|e| format!("Failed to initiate Google Drive upload session: {}", e))?;

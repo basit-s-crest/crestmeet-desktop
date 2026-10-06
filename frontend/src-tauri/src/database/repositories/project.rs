@@ -11,70 +11,6 @@ use uuid::Uuid;
 pub struct ProjectsRepository;
 
 impl ProjectsRepository {
-    /// Get or create the user's default Personal project
-    pub async fn get_or_create_personal_project(
-        pool: &PgPool,
-        user_id: Uuid,
-    ) -> Result<Project, SqlxError> {
-        let existing = sqlx::query_as::<_, Project>(
-            r#"
-            SELECT id, name, description, is_personal, COALESCE(is_archived, false) as is_archived, created_by, created_at, updated_at
-            FROM projects
-            WHERE created_by = $1 AND is_personal = true
-            LIMIT 1
-            "#,
-        )
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await?;
-
-        if let Some(project) = existing {
-            // Ensure owner membership exists
-            let _ = sqlx::query(
-                r#"
-                INSERT INTO project_members (project_id, user_id, role)
-                VALUES ($1, $2, 'owner')
-                ON CONFLICT (project_id, user_id) DO NOTHING
-                "#,
-            )
-            .bind(project.id)
-            .bind(user_id)
-            .execute(pool)
-            .await;
-
-            return Ok(project);
-        }
-
-        // Create new Personal project
-        let mut tx = pool.begin().await?;
-        let project = sqlx::query_as::<_, Project>(
-            r#"
-            INSERT INTO projects (name, is_personal, created_by)
-            VALUES ('Personal', true, $1)
-            RETURNING id, name, description, is_personal, COALESCE(is_archived, false) as is_archived, created_by, created_at, updated_at
-            "#,
-        )
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            r#"
-            INSERT INTO project_members (project_id, user_id, role)
-            VALUES ($1, $2, 'owner')
-            ON CONFLICT (project_id, user_id) DO NOTHING
-            "#,
-        )
-        .bind(project.id)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-        info!("Created personal project {} for user {}", project.id, user_id);
-        Ok(project)
-    }
-
     /// List all projects where user is a member, ordered by updated_at DESC
     pub async fn get_user_projects(
         pool: &PgPool,
@@ -93,7 +29,7 @@ impl ProjectsRepository {
                 p.updated_at,
                 pm.role,
                 (SELECT COUNT(*)::bigint FROM project_members WHERE project_id = p.id) AS member_count,
-                (SELECT COUNT(*)::bigint FROM meetings WHERE project_id = p.id) AS meeting_count
+                (SELECT COUNT(*)::bigint FROM meetings WHERE project_id = p.id OR (p.is_personal = true AND project_id IS NULL AND user_id = p.created_by)) AS meeting_count
             FROM projects p
             JOIN project_members pm ON p.id = pm.project_id
             WHERE pm.user_id = $1
@@ -104,7 +40,7 @@ impl ProjectsRepository {
         .fetch_all(pool)
         .await?;
 
-        let result = rows
+        let mut result: Vec<ProjectWithRole> = rows
             .into_iter()
             .map(|(id, name, description, is_personal, is_archived, created_by, created_at, updated_at, role, member_count, meeting_count)| {
                 ProjectWithRole {
@@ -122,6 +58,9 @@ impl ProjectsRepository {
                 }
             })
             .collect();
+
+        // Never surface empty personal projects: users only have projects they create or are invited to
+        result.retain(|p| !p.is_personal || p.meeting_count > 0);
 
         Ok(result)
     }

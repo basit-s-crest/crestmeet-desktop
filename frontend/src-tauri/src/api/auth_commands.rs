@@ -229,165 +229,143 @@ pub async fn auth_login(
     password: String,
 ) -> Result<AuthResponse, String> {
     let email = email.trim().to_lowercase();
+    if email.is_empty() {
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("Email address is required".to_string()),
+        });
+    }
+
     let pool = state.db_manager.pool();
 
-    // Try auth.users first
-    let user_result: Result<Option<(Uuid, String)>, sqlx::Error> = sqlx::query_as(
+    // Step 1: Look for user by email across app_users (primary) and auth.users
+    let app_user: Option<(Uuid, String, String)> = sqlx::query_as(
         r#"
-        SELECT id, email FROM auth.users
-        WHERE LOWER(email) = LOWER($1) AND encrypted_password = crypt($2, encrypted_password)
+        SELECT id, email, password_hash
+        FROM app_users
+        WHERE LOWER(TRIM(email)) = $1
+        LIMIT 1
         "#
     )
     .bind(&email)
-    .bind(&password)
     .fetch_optional(pool)
-    .await;
+    .await
+    .unwrap_or(None);
 
-    match user_result {
-        Ok(Some((user_id, user_email))) => {
-            // Ensure synced in app_users
+    let auth_user: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT id, email, encrypted_password
+        FROM auth.users
+        WHERE LOWER(TRIM(email)) = $1
+        LIMIT 1
+        "#
+    )
+    .bind(&email)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None);
+
+    // If account does NOT exist anywhere, return email-not-found error
+    if app_user.is_none() && auth_user.is_none() {
+        info!("Login attempt failed: No account found for email '{}'", email);
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("No account found with this email. Please check your email or create an account first.".to_string()),
+        });
+    }
+
+    // Step 2: Validate password against available password hash
+    let mut password_valid = false;
+
+    if let Some((_, _, ref app_hash)) = app_user {
+        if !app_hash.trim().is_empty() {
+            password_valid = sqlx::query_scalar::<_, bool>("SELECT ($1 = crypt($2, $1))")
+                .bind(app_hash)
+                .bind(&password)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(false);
+        }
+    }
+
+    if !password_valid {
+        if let Some((_, _, Some(ref auth_hash))) = auth_user {
+            if !auth_hash.trim().is_empty() {
+                password_valid = sqlx::query_scalar::<_, bool>("SELECT ($1 = crypt($2, $1))")
+                    .bind(auth_hash)
+                    .bind(&password)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap_or(false);
+            }
+        }
+    }
+
+    if !password_valid {
+        info!("Login attempt failed: Incorrect password for email '{}'", email);
+        return Ok(AuthResponse {
+            success: false,
+            user: None,
+            error: Some("Incorrect password. Please try again or reset your password.".to_string()),
+        });
+    }
+
+    // Step 3: Password valid! Determine canonical user ID.
+    // CRITICAL: We MUST prioritize app_users ID because project_members, projects, meetings,
+    // and all foreign keys in the app point to app_users(id).
+    let (user_id, user_email) = match (app_user, auth_user) {
+        (Some((app_id, uemail, _)), _) => (app_id, uemail),
+        (None, Some((auth_id, uemail, _))) => {
+            // User exists only in auth.users; sync into app_users with the same ID
             let _ = sqlx::query(
                 r#"
                 INSERT INTO app_users (id, email, password_hash, created_at, updated_at)
                 VALUES ($1, $2, crypt($3, gen_salt('bf', 10)), NOW(), NOW())
-                ON CONFLICT (id) DO NOTHING
+                ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email
                 "#
             )
-            .bind(user_id)
-            .bind(&user_email)
+            .bind(auth_id)
+            .bind(&uemail)
             .bind(&password)
             .execute(pool)
             .await;
-
-            let mut current = state.current_user_id.write().await;
-            *current = Some(user_id);
-            info!("✅ Successfully logged in user from auth.users: {}", user_email);
-
-            Ok(AuthResponse {
-                success: true,
-                user: Some(AuthUser {
-                    id: user_id.to_string(),
-                    email: user_email,
-                }),
-                error: None,
-            })
+            (auth_id, uemail)
         }
-        Ok(None) => {
-            // Fallback: Check app_users table
-            let app_user: Result<Option<(Uuid, String)>, sqlx::Error> = sqlx::query_as(
-                r#"
-                SELECT id, email FROM app_users
-                WHERE LOWER(email) = LOWER($1) AND password_hash = crypt($2, password_hash)
-                "#
-            )
-            .bind(&email)
-            .bind(&password)
-            .fetch_optional(pool)
-            .await;
+        (None, None) => unreachable!(),
+    };
 
-            match app_user {
-                Ok(Some((user_id, user_email))) => {
-                    let mut current = state.current_user_id.write().await;
-                    *current = Some(user_id);
-                    info!("✅ Successfully logged in user from app_users: {}", user_email);
-                    Ok(AuthResponse {
-                        success: true,
-                        user: Some(AuthUser {
-                            id: user_id.to_string(),
-                            email: user_email,
-                        }),
-                        error: None,
-                    })
-                }
-                _ => {
-                    let email_exists = sqlx::query_scalar::<_, i64>(
-                        "SELECT count(*) FROM (
-                            SELECT id FROM app_users WHERE LOWER(email) = LOWER($1)
-                            UNION ALL
-                            SELECT id FROM auth.users WHERE LOWER(email) = LOWER($1)
-                        ) t"
-                    )
-                    .bind(&email)
-                    .fetch_one(pool)
-                    .await
-                    .unwrap_or(0);
-
-                    if email_exists == 0 {
-                        Ok(AuthResponse {
-                            success: false,
-                            user: None,
-                            error: Some("No account found with this email. Please create an account first.".to_string()),
-                        })
-                    } else {
-                        Ok(AuthResponse {
-                            success: false,
-                            user: None,
-                            error: Some("Incorrect password. Please try again or reset your password.".to_string()),
-                        })
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            error!("Database error during login: {}", e);
-            // Also try fallback if auth.users had a permission error
-            let app_user: Result<Option<(Uuid, String)>, sqlx::Error> = sqlx::query_as(
-                r#"
-                SELECT id, email FROM app_users
-                WHERE LOWER(email) = LOWER($1) AND password_hash = crypt($2, password_hash)
-                "#
-            )
-            .bind(&email)
-            .bind(&password)
-            .fetch_optional(pool)
-            .await;
-
-            match app_user {
-                Ok(Some((user_id, user_email))) => {
-                    let mut current = state.current_user_id.write().await;
-                    *current = Some(user_id);
-                    info!("✅ Successfully logged in user from app_users (after auth error): {}", user_email);
-                    Ok(AuthResponse {
-                        success: true,
-                        user: Some(AuthUser {
-                            id: user_id.to_string(),
-                            email: user_email,
-                        }),
-                        error: None,
-                    })
-                }
-                _ => {
-                    let email_exists = sqlx::query_scalar::<_, i64>(
-                        "SELECT count(*) FROM app_users WHERE LOWER(email) = LOWER($1)"
-                    )
-                    .bind(&email)
-                    .fetch_one(pool)
-                    .await
-                    .unwrap_or(0);
-
-                    if email_exists == 0 {
-                        Ok(AuthResponse {
-                            success: false,
-                            user: None,
-                            error: Some("No account found with this email. Please create an account first.".to_string()),
-                        })
-                    } else {
-                        Ok(AuthResponse {
-                            success: false,
-                            user: None,
-                            error: Some("Incorrect password. Please try again or reset your password.".to_string()),
-                        })
-                    }
-                }
-            }
-        }
+    // Reset active project ID in memory so a previously logged-in user's active project is never leaked
+    {
+        let mut active = state.active_project_id.write().await;
+        *active = None;
     }
+
+    let mut current = state.current_user_id.write().await;
+    *current = Some(user_id);
+    info!("✅ Successfully logged in user: {}", user_email);
+
+    Ok(AuthResponse {
+        success: true,
+        user: Some(AuthUser {
+            id: user_id.to_string(),
+            email: user_email,
+        }),
+        error: None,
+    })
 }
 
 #[tauri::command]
 pub async fn auth_logout(state: State<'_, AppState>) -> Result<(), String> {
-    let mut current = state.current_user_id.write().await;
-    *current = None;
+    {
+        let mut current = state.current_user_id.write().await;
+        *current = None;
+    }
+    {
+        let mut active = state.active_project_id.write().await;
+        *active = None;
+    }
     info!("🔓 User logged out");
     Ok(())
 }
@@ -434,21 +412,34 @@ pub async fn auth_restore_session(
 
     match user_result {
         Ok(Some((uid, email))) => {
-            let mut current = state.current_user_id.write().await;
-            *current = Some(uid);
-            info!("🔄 Restored user session from auth.users: {}", email);
-
-            // Sync into app_users so subsequent lookups hit the primary table immediately
-            let _ = sqlx::query(
-                "INSERT INTO app_users (id, email, password_hash, created_at, updated_at) VALUES ($1, $2, 'synced', NOW(), NOW()) ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email"
+            // Check if app_users already has a record for this email
+            let existing_app_id: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM app_users WHERE LOWER(TRIM(email)) = LOWER(TRIM($1)) LIMIT 1"
             )
-            .bind(uid)
             .bind(&email)
-            .execute(pool)
-            .await;
+            .fetch_optional(pool)
+            .await
+            .unwrap_or(None);
+
+            let canonical_id = if let Some(aid) = existing_app_id {
+                aid
+            } else {
+                let _ = sqlx::query(
+                    "INSERT INTO app_users (id, email, password_hash, created_at, updated_at) VALUES ($1, $2, 'synced', NOW(), NOW()) ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email"
+                )
+                .bind(uid)
+                .bind(&email)
+                .execute(pool)
+                .await;
+                uid
+            };
+
+            let mut current = state.current_user_id.write().await;
+            *current = Some(canonical_id);
+            info!("🔄 Restored user session for: {}", email);
 
             Ok(Some(AuthUser {
-                id: uid.to_string(),
+                id: canonical_id.to_string(),
                 email,
             }))
         }

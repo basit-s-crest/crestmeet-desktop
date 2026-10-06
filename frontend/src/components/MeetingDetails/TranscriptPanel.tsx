@@ -1,11 +1,13 @@
-"use client";
+'use client';
 
 import { Transcript, TranscriptSegmentData } from '@/types';
 import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { MeetingVideoPlayer } from './MeetingVideoPlayer';
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -85,6 +87,60 @@ export function TranscriptPanel({
     }));
   }, [transcripts, usePagination, segments]);
 
+  const { user } = useAuth();
+  const [isFolderLocal, setIsFolderLocal] = useState<boolean>(false);
+  const [hasLocalVideo, setHasLocalVideo] = useState<boolean>(false);
+  const [isVideoPlayerOpen, setIsVideoPlayerOpen] = useState<boolean>(false);
+
+  // Check whether the recording folder physically exists on this device
+  useEffect(() => {
+    let isMounted = true;
+    if (!meetingFolderPath) {
+      setIsFolderLocal(false);
+      setHasLocalVideo(false);
+      return;
+    }
+    invoke<boolean>('api_check_folder_exists', { folderPath: meetingFolderPath })
+      .then((exists) => {
+        if (isMounted) setIsFolderLocal(Boolean(exists));
+      })
+      .catch(() => {
+        if (isMounted) setIsFolderLocal(false);
+      });
+
+    invoke<string | null>('api_check_meeting_video', { folderPath: meetingFolderPath })
+      .then((path) => {
+        if (isMounted) setHasLocalVideo(Boolean(path));
+      })
+      .catch(() => {
+        if (isMounted) setHasLocalVideo(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [meetingFolderPath]);
+
+  // If a timestamp seek event fires from transcript, automatically reveal video player
+  useEffect(() => {
+    const handleSeek = () => {
+      setIsVideoPlayerOpen(true);
+    };
+    window.addEventListener('crestmeet_seek_video', handleSeek);
+    return () => {
+      window.removeEventListener('crestmeet_seek_video', handleSeek);
+    };
+  }, []);
+
+  // Meeting has a video if flagged in DB, stored in Drive, or present locally
+  const hasVideoRecording = Boolean(
+    hasVideo || driveFileId || videoUrl || uploadStatus || hasLocalVideo
+  );
+
+  // Only allow opening folder if this device actually has the folder and user recorded it
+  const isRecorder = !recorderId || !user?.id || user.id === recorderId;
+  const canOpenFolder = isRecorder && isFolderLocal;
+
   return (
     <div
       className={`hidden md:flex min-w-0 bg-white flex-col relative shrink-0 ${
@@ -101,21 +157,28 @@ export function TranscriptPanel({
           meetingId={meetingId}
           meetingFolderPath={meetingFolderPath}
           onRefetchTranscripts={onRefetchTranscripts}
+          canOpenFolder={canOpenFolder}
+          hasVideoRecording={hasVideoRecording}
+          isVideoPlayerOpen={isVideoPlayerOpen}
+          onToggleVideoPlayer={() => setIsVideoPlayerOpen((prev) => !prev)}
         />
       </div>
 
-      {/* Meeting Screen Recording Video Player / Google Drive Streaming Player */}
-      <MeetingVideoPlayer
-        meetingId={meetingId}
-        folderPath={meetingFolderPath}
-        hasVideo={hasVideo}
-        recorderId={recorderId}
-        recorderEmail={recorderEmail}
-        projectId={projectId}
-        driveFileId={driveFileId}
-        videoUrl={videoUrl}
-        uploadStatus={uploadStatus}
-      />
+      {/* Meeting Screen Recording Video Player / Google Drive Streaming Player (revealed on button click) */}
+      {isVideoPlayerOpen && hasVideoRecording && (
+        <MeetingVideoPlayer
+          meetingId={meetingId}
+          folderPath={meetingFolderPath}
+          hasVideo={hasVideo}
+          recorderId={recorderId}
+          recorderEmail={recorderEmail}
+          projectId={projectId}
+          driveFileId={driveFileId}
+          videoUrl={videoUrl}
+          uploadStatus={uploadStatus}
+          onClose={() => setIsVideoPlayerOpen(false)}
+        />
+      )}
 
       {/* Transcript content - use virtualized view for better performance */}
       <div className="flex-1 overflow-hidden pb-4">

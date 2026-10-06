@@ -315,42 +315,6 @@ impl DatabaseManager {
             CREATE TRIGGER trg_summary_processes_project_id
             BEFORE INSERT ON summary_processes
             FOR EACH ROW EXECUTE FUNCTION set_project_id_from_meeting();
-
-            -- Idempotent backfill migration for existing users & meetings:
-            -- Create a default "Personal" project for any user who doesn't have one and link their meetings.
-            DO $backfill$
-            DECLARE
-                r RECORD;
-                v_proj_id UUID;
-            BEGIN
-                FOR r IN (
-                    SELECT DISTINCT user_id FROM meetings WHERE user_id IS NOT NULL
-                    UNION
-                    SELECT id AS user_id FROM app_users
-                ) LOOP
-                    SELECT id INTO v_proj_id FROM projects WHERE created_by = r.user_id AND is_personal = true LIMIT 1;
-                    IF v_proj_id IS NULL THEN
-                        INSERT INTO projects (name, is_personal, created_by)
-                        VALUES ('Personal', true, r.user_id)
-                        RETURNING id INTO v_proj_id;
-
-                        INSERT INTO project_members (project_id, user_id, role)
-                        VALUES (v_proj_id, r.user_id, 'owner')
-                        ON CONFLICT (project_id, user_id) DO NOTHING;
-                    END IF;
-
-                    UPDATE meetings SET project_id = v_proj_id
-                    WHERE user_id = r.user_id AND project_id IS NULL;
-
-                    UPDATE transcripts t SET project_id = m.project_id
-                    FROM meetings m
-                    WHERE t.meeting_id = m.id AND t.project_id IS NULL AND m.project_id IS NOT NULL;
-
-                    UPDATE summary_processes s SET project_id = m.project_id
-                    FROM meetings m
-                    WHERE s.meeting_id = m.id AND s.project_id IS NULL AND m.project_id IS NOT NULL;
-                END LOOP;
-            END $backfill$;
         "#;
 
         sqlx::raw_sql(schema).execute(pool).await?;

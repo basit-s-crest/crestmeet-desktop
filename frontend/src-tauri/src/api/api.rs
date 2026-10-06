@@ -10,7 +10,7 @@ use crate::{
     database::{
         models::MeetingModel,
         repositories::{
-            meeting::MeetingsRepository, setting::SettingsRepository,
+            meeting::MeetingsRepository, project::ProjectsRepository, setting::SettingsRepository,
             transcript::TranscriptsRepository,
         },
     },
@@ -375,14 +375,40 @@ pub async fn api_get_meetings<R: Runtime>(
         if pid_str == "all" {
             MeetingsRepository::get_meetings_for_user(pool, current_user).await
         } else if let Ok(pid) = Uuid::from_str(pid_str) {
-            MeetingsRepository::get_meetings_for_project(pool, pid).await
+            let is_member = if let Some(uid) = current_user {
+                ProjectsRepository::get_user_role(pool, pid, uid)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+            } else {
+                false
+            };
+            if is_member {
+                MeetingsRepository::get_meetings_for_project(pool, pid).await
+            } else {
+                MeetingsRepository::get_meetings_for_user(pool, current_user).await
+            }
         } else {
             MeetingsRepository::get_meetings_for_user(pool, current_user).await
         }
     } else {
         let active = *state.active_project_id.read().await;
         if let Some(active_pid) = active {
-            MeetingsRepository::get_meetings_for_project(pool, active_pid).await
+            let is_member = if let Some(uid) = current_user {
+                ProjectsRepository::get_user_role(pool, active_pid, uid)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+            } else {
+                false
+            };
+            if is_member {
+                MeetingsRepository::get_meetings_for_project(pool, active_pid).await
+            } else {
+                MeetingsRepository::get_meetings_for_user(pool, current_user).await
+            }
         } else {
             MeetingsRepository::get_meetings_for_user(pool, current_user).await
         }
@@ -1187,9 +1213,8 @@ pub async fn api_save_transcript<R: Runtime>(
 
     if resolved_project_id.is_none() {
         if let Some(uid) = current_user {
-            if let Ok(personal) = crate::database::repositories::project::ProjectsRepository::get_or_create_personal_project(pool, uid).await {
-                resolved_project_id = Some(personal.id);
-            }
+            let user_projects = crate::database::repositories::project::ProjectsRepository::get_user_projects(pool, uid).await.unwrap_or_default();
+            resolved_project_id = user_projects.into_iter().find(|p| !p.is_archived).and_then(|p| Uuid::from_str(&p.id).ok());
         }
     }
 
@@ -1257,7 +1282,7 @@ pub async fn open_meeting_folder<R: Runtime>(
                 let path = std::path::Path::new(&folder_path);
                 if !path.exists() {
                     log_warn!("Folder path does not exist: {}", folder_path);
-                    return Err(format!("Recording folder not found: {}", folder_path));
+                    return Err("Recording folder not found , Meeting is recorded by others".to_string());
                 }
 
                 // Open folder based on OS
@@ -1289,7 +1314,7 @@ pub async fn open_meeting_folder<R: Runtime>(
                 Ok(())
             } else {
                 log_warn!("Meeting {} has no folder_path set", meeting_id);
-                Err("Recording folder path not available for this meeting".to_string())
+                Err("Recording folder not found , Meeting is recorded by others".to_string())
             }
         }
         None => {
@@ -1297,6 +1322,15 @@ pub async fn open_meeting_folder<R: Runtime>(
             Err("Meeting not found".to_string())
         }
     }
+}
+
+/// Checks whether a recording folder exists on the current device
+#[tauri::command]
+pub async fn api_check_folder_exists(folder_path: String) -> Result<bool, String> {
+    if folder_path.trim().is_empty() {
+        return Ok(false);
+    }
+    Ok(std::path::Path::new(&folder_path).is_dir())
 }
 
 // Simple test command to check backend connectivity

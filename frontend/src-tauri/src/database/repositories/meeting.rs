@@ -32,12 +32,31 @@ impl MeetingsRepository {
         pool: &PgPool,
         project_id: Uuid,
     ) -> Result<Vec<MeetingModel>, sqlx::Error> {
-        let meetings = sqlx::query_as::<_, MeetingModel>(
-            "SELECT * FROM meetings WHERE project_id = $1 ORDER BY created_at DESC",
+        // If this project is the personal project of a user, also include unassigned (project_id IS NULL) meetings by this user
+        let owner_opt: Option<Uuid> = sqlx::query_scalar(
+            "SELECT created_by FROM projects WHERE id = $1 AND is_personal = true",
         )
         .bind(project_id)
-        .fetch_all(pool)
-        .await?;
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None);
+
+        let meetings = if let Some(owner_id) = owner_opt {
+            sqlx::query_as::<_, MeetingModel>(
+                "SELECT * FROM meetings WHERE project_id = $1 OR (project_id IS NULL AND user_id = $2) ORDER BY created_at DESC",
+            )
+            .bind(project_id)
+            .bind(owner_id)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, MeetingModel>(
+                "SELECT * FROM meetings WHERE project_id = $1 ORDER BY created_at DESC",
+            )
+            .bind(project_id)
+            .fetch_all(pool)
+            .await?
+        };
         Ok(meetings)
     }
 

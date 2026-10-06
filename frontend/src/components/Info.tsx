@@ -6,24 +6,32 @@ import { About } from "./About";
 
 interface InfoProps {
     isCollapsed: boolean;
+    version?: string;
 }
 
-const Info = React.forwardRef<HTMLButtonElement, InfoProps>(({ isCollapsed }, ref) => {
+const Info = React.forwardRef<HTMLButtonElement, InfoProps>(({ isCollapsed, version = "v0.4.0" }, ref) => {
   return (
     <Dialog aria-describedby={undefined}>
       <DialogTrigger asChild>
         <button 
           ref={ref} 
-          className={`flex items-center justify-center mb-2 cursor-pointer border-none transition-colors ${
+          className={`cursor-pointer transition-all ${
             isCollapsed 
-              ? "bg-transparent p-2 hover:bg-gray-100 rounded-lg" 
-              : "w-full px-3 py-1.5 mt-1 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-200 rounded-lg shadow-sm"
+              ? "flex items-center justify-center p-2.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl" 
+              : "w-full px-2.5 py-1.5 flex items-center justify-between text-xs font-medium rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100/90 border border-transparent hover:border-slate-200/50 group"
           }`}
           title="About CrestMeet"
         >
-          <InfoIcon className={`text-gray-600 ${isCollapsed ? "w-5 h-5" : "w-4 h-4"}`} />
+          <div className="flex items-center gap-2">
+            <InfoIcon className={`transition-colors ${isCollapsed ? "w-5 h-5 text-slate-500" : "w-3.5 h-3.5 text-slate-400 group-hover:text-slate-600"}`} />
+            {!isCollapsed && (
+              <span className="text-slate-600 group-hover:text-slate-900 font-medium">About CrestMeet</span>
+            )}
+          </div>
           {!isCollapsed && (
-            <span className="ml-2 text-sm text-gray-700">About</span>
+            <span className="text-[10px] font-mono font-medium text-slate-400 bg-slate-100 group-hover:bg-slate-200/80 group-hover:text-slate-600 px-1.5 py-0.5 rounded-md transition-colors">
+              {version}
+            </span>
           )}
         </button>
       </DialogTrigger>

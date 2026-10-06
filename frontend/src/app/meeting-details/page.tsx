@@ -155,6 +155,9 @@ function MeetingDetailsContent() {
         user_id: metadata.user_id,
         recorder_email: metadata.recorder_email,
         project_id: metadata.project_id,
+        video_url: metadata.video_url,
+        drive_file_id: metadata.drive_file_id,
+        upload_status: metadata.upload_status,
       });
 
       // Sync with sidebar context
