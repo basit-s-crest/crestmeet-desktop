@@ -46,6 +46,12 @@ pub struct Meeting {
     pub upload_status: Option<String>,
     #[serde(default)]
     pub folder_path: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub user_email: Option<String>,
+    #[serde(default)]
+    pub is_local_file_available: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -418,20 +424,40 @@ pub async fn api_get_meetings<R: Runtime>(
         Ok(meeting_models) => {
             log_info!("Successfully got {} meetings", meeting_models.len());
 
+            let users_map: std::collections::HashMap<Uuid, String> =
+                sqlx::query_as::<_, (Uuid, String)>("SELECT id, email FROM app_users")
+                    .fetch_all(pool)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+
             let result: Vec<Meeting> = meeting_models
                 .into_iter()
                 .map(|m| {
-                    let has_video = if m.has_video {
-                        true
-                    } else if let Some(ref fp) = m.folder_path {
+                    let has_raw_video = if let Some(ref fp) = m.folder_path {
                         let path = std::path::Path::new(fp);
-                        path.join("meeting_video.webm").exists()
-                            || path.join("meeting_video_merged.mp4").exists()
-                            || path.join("meeting_video.mp4").exists()
-                            || path.join("recording.webm").exists()
+                        path.exists()
+                            && (path.join("meeting_video.webm").exists()
+                                || path.join("meeting_video.mp4").exists()
+                                || path.join("recording.webm").exists()
+                                || path.join("recording.mp4").exists())
                     } else {
                         false
                     };
+
+                    let has_video = m.has_video || has_raw_video || m.drive_file_id.is_some();
+
+                    let is_local_file_available = has_video && if let Some(ref fp) = m.folder_path {
+                        let path = std::path::Path::new(fp);
+                        path.exists()
+                            && (has_raw_video
+                                || path.join("meeting_video_merged.mp4").exists())
+                    } else {
+                        false
+                    };
+                    let user_email = m.user_id.and_then(|uid| users_map.get(&uid).cloned());
+                    let user_id = m.user_id.map(|uid| uid.to_string());
 
                     Meeting {
                         id: m.id,
@@ -444,6 +470,9 @@ pub async fn api_get_meetings<R: Runtime>(
                         drive_file_id: m.drive_file_id,
                         upload_status: m.upload_status,
                         folder_path: m.folder_path,
+                        user_id,
+                        user_email,
+                        is_local_file_available,
                     }
                 })
                 .collect();

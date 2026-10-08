@@ -32,6 +32,9 @@ import {
   CloudUpload,
   Play,
   Loader2,
+  AlertCircle,
+  Video,
+  ExternalLink,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useSidebar, CurrentMeeting } from '@/components/Sidebar/SidebarProvider';
@@ -55,6 +58,7 @@ import { listen } from '@tauri-apps/api/event';
 import { UploadProgressPayload } from '@/services/googleDriveService';
 import { toast } from 'sonner';
 import { ConfirmationModal } from '@/components/ConfirmationModel/confirmation-modal';
+import { InboxPopover } from '@/components/Inbox/InboxPopover';
 import {
   Dialog,
   DialogContent,
@@ -64,6 +68,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 
 type SortOrder = 'newest' | 'oldest';
 type DateFilter = 'all' | 'today' | 'week' | 'month' | 'custom';
@@ -242,6 +252,9 @@ export default function MeetingsPage() {
             drive_file_id: m.drive_file_id,
             upload_status: m.upload_status,
             folder_path: m.folder_path,
+            user_id: m.user_id,
+            user_email: m.user_email,
+            is_local_file_available: m.is_local_file_available,
           }));
           setProjectMeetings(transformed);
         }
@@ -568,23 +581,29 @@ export default function MeetingsPage() {
             {/* Header Actions */}
             <div className="flex items-center gap-3 shrink-0">
               {!selectedProject ? (
-                <Button
-                  variant="outline"
-                  onClick={() => setIsCreateProjectOpen(true)}
-                  className="flex items-center gap-2 border-gray-300 text-gray-700 hover:bg-gray-100 rounded-lg shadow-sm"
-                >
-                  <FolderPlus className="w-4 h-4 text-gray-600" />
-                  <span>New Project</span>
-                </Button>
+                <div className="flex items-center gap-2.5">
+                  <Button
+                    variant="outline"
+                    onClick={() => setIsCreateProjectOpen(true)}
+                    className="flex items-center gap-2 border-gray-300 text-gray-700 hover:bg-gray-100 rounded-lg shadow-sm"
+                  >
+                    <FolderPlus className="w-4 h-4 text-gray-600" />
+                    <span>New Project</span>
+                  </Button>
+                  <InboxPopover />
+                </div>
               ) : selectedProject.is_archived ? (
-                <Button
-                  variant="outline"
-                  onClick={() => handleRestoreProject(selectedProject)}
-                  className="flex items-center gap-2 border-amber-300 text-amber-900 hover:bg-amber-100 bg-white rounded-lg shadow-sm font-medium transition-colors"
-                >
-                  <RotateCcw className="w-4 h-4 text-amber-700" />
-                  <span>Restore Project</span>
-                </Button>
+                <div className="flex items-center gap-2.5">
+                  <Button
+                    variant="outline"
+                    onClick={() => handleRestoreProject(selectedProject)}
+                    className="flex items-center gap-2 border-amber-300 text-amber-900 hover:bg-amber-100 bg-white rounded-lg shadow-sm font-medium transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4 text-amber-700" />
+                    <span>Restore Project</span>
+                  </Button>
+                  <InboxPopover />
+                </div>
               ) : (
                 <div className="flex items-center gap-2.5">
                   <Button
@@ -615,6 +634,8 @@ export default function MeetingsPage() {
                     <Mic className="w-4 h-4" />
                     <span>Record call</span>
                   </Button>
+
+                  <InboxPopover />
                 </div>
               )}
             </div>
@@ -1094,6 +1115,23 @@ export default function MeetingsPage() {
                       effectiveUploadStatus === 'checking_drive';
                     const isPaused = effectiveUploadStatus === 'paused';
 
+                    const isRecorder = Boolean(
+                      meeting.user_id
+                        ? (user?.id && meeting.user_id.toLowerCase() === user.id.toLowerCase()) ||
+                          (meeting.user_email && user?.email && meeting.user_email.toLowerCase() === user.email.toLowerCase())
+                        : true
+                    );
+                    const hasLocalFile = Boolean(meeting.is_local_file_available);
+                    const canUploadOnThisDevice = isRecorder && hasLocalFile;
+                    const driveLink = effectiveDriveFileId
+                      ? `https://drive.google.com/file/d/${effectiveDriveFileId}/view`
+                      : meeting.video_url || undefined;
+                    const recorderName = meeting.user_email
+                      ? meeting.user_email.includes('@')
+                        ? meeting.user_email.split('@')[0]
+                        : meeting.user_email
+                      : 'User';
+
                     return (
                     <div
                       key={meeting.id}
@@ -1139,12 +1177,21 @@ export default function MeetingsPage() {
                         {hasVideo && (
                           <>
                             {isUploaded ? (
-                              <div
-                                className="p-2 bg-white border border-gray-200/90 shadow-2xs rounded-lg text-emerald-600 flex items-center justify-center transition-all cursor-default"
-                                title="Uploaded to Google Drive"
+                              <a
+                                href={driveLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (driveLink) {
+                                    window.open(driveLink, '_blank');
+                                  }
+                                }}
+                                className="p-2 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                                title="Watch video on Google Drive"
                               >
-                                <Check className="w-4 h-4 stroke-[2.5]" />
-                              </div>
+                                <Video className="w-4 h-4" />
+                              </a>
                             ) : isUploading ? (
                               <button
                                 type="button"
@@ -1158,16 +1205,36 @@ export default function MeetingsPage() {
                                 )}
                               </button>
                             ) : isPaused ? (
-                              <button
-                                type="button"
-                                onClick={() => resumeUpload(meeting.id, meeting.folder_path || '')}
-                                className="p-2 bg-amber-50 border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-100 transition-all flex items-center gap-1 cursor-pointer shadow-xs animate-pulse"
-                                title="Resume Upload to Google Drive"
-                              >
-                                <Play className="w-3.5 h-3.5 fill-current" />
-                                <span className="text-[10px] font-semibold hidden md:inline">Resume</span>
-                              </button>
-                            ) : (
+                              canUploadOnThisDevice ? (
+                                <button
+                                  type="button"
+                                  onClick={() => resumeUpload(meeting.id, meeting.folder_path || '')}
+                                  className="p-2 bg-amber-50 border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-100 transition-all flex items-center gap-1 cursor-pointer shadow-xs animate-pulse"
+                                  title="Resume Upload to Google Drive"
+                                >
+                                  <Play className="w-3.5 h-3.5 fill-current" />
+                                  <span className="text-[10px] font-semibold hidden md:inline">Resume</span>
+                                </button>
+                              ) : (
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div
+                                        className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-600 flex items-center justify-center transition-all cursor-help shadow-2xs"
+                                      >
+                                        <AlertCircle className="w-4 h-4 text-amber-500" />
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="top" className="text-xs max-w-[240px] bg-slate-900 text-white border-slate-800">
+                                      <p className="font-semibold text-white">Upload paused on recorder's device</p>
+                                      <p className="text-[11px] text-slate-300 mt-0.5">
+                                        Will resume when {recorderName} connects and resumes upload.
+                                      </p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              )
+                            ) : canUploadOnThisDevice ? (
                               <button
                                 type="button"
                                 onClick={() => retryUpload(meeting.id, meeting.folder_path || '')}
@@ -1177,6 +1244,28 @@ export default function MeetingsPage() {
                                 <CloudUpload className="w-4 h-4" />
                                 <span className="text-[10px] font-semibold hidden md:inline">Upload</span>
                               </button>
+                            ) : (
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <div
+                                      className="p-2 bg-amber-50/90 border border-amber-200/90 shadow-2xs rounded-lg text-amber-600 flex items-center justify-center transition-all cursor-help"
+                                    >
+                                      <AlertCircle className="w-4 h-4 text-amber-500" />
+                                    </div>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="text-xs max-w-[240px] bg-slate-900 text-white border-slate-800">
+                                    <p className="font-semibold text-white">
+                                      Pending upload by {recorderName}
+                                    </p>
+                                    <p className="text-[11px] text-slate-300 mt-0.5">
+                                      {isRecorder
+                                        ? "The recorded video file is located on another device. Open CrestMeet on the recording device to upload."
+                                        : `Only ${recorderName} can upload this video recording from their device.`}
+                                    </p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
                             )}
                           </>
                         )}

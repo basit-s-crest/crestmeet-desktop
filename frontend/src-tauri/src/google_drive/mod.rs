@@ -796,6 +796,21 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
     let meeting_id_clone = meeting_id.clone();
     let folder_path_clone = folder_path.clone();
 
+    // Check meeting metadata: must have video and must be owned by current user (if user is logged in)
+    let current_user_id = *state.current_user_id.read().await;
+    if let Ok(Some(meta)) = MeetingsRepository::get_meeting_metadata(&pool, &meeting_id).await {
+        if !meta.has_video {
+            log_info!("Meeting {} does not have video recording. Skipping Drive upload.", meeting_id);
+            return Err("Meeting does not have a video recording; audio-only meetings are not uploaded to Drive.".to_string());
+        }
+        if let (Some(curr_uid), Some(rec_uid)) = (current_user_id, meta.user_id) {
+            if curr_uid != rec_uid {
+                log_warn!("User {} attempted to upload meeting {} recorded by user {}", curr_uid, meeting_id, rec_uid);
+                return Err("Only the user who recorded this meeting can upload it.".to_string());
+            }
+        }
+    }
+
     // Create job control and register
     let job_ctrl = UploadJobControl {
         is_paused: Arc::new(AtomicBool::new(false)),
@@ -875,12 +890,11 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
             match crate::video::commands::api_merge_meeting_video_and_audio(folder_str.clone()).await {
                 Ok(path_str) => PathBuf::from(path_str),
                 Err(e) => {
-                    log_warn!("Merge warning: {}. Checking for raw video or audio files...", e);
+                    log_warn!("Merge warning: {}. Checking for raw video files...", e);
                     let raw_webm = folder.join("meeting_video.webm");
                     let raw_mp4 = folder.join("meeting_video.mp4");
                     let rec_webm = folder.join("recording.webm");
                     let rec_mp4 = folder.join("recording.mp4");
-                    let audio_mp4 = folder.join("audio.mp4");
 
                     if raw_webm.exists() {
                         raw_webm
@@ -890,12 +904,10 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
                         rec_webm
                     } else if rec_mp4.exists() {
                         rec_mp4
-                    } else if audio_mp4.exists() {
-                        audio_mp4
                     } else {
-                        log_error!("No video or audio file found in folder {}", folder_str);
-                        emit_update(0, "error", Some("No video or audio file found".to_string()), None, None);
-                        let _ = MeetingsRepository::update_meeting_drive_info(&pool, &meeting_id_clone, None, None, "failed").await;
+                        log_info!("No video file found in folder {}. Skipping Drive upload as meeting is audio-only.", folder_str);
+                        emit_update(0, "not_video", Some("Meeting is audio-only".to_string()), None, None);
+                        let _ = MeetingsRepository::update_meeting_drive_info(&pool, &meeting_id_clone, None, None, "none").await;
                         let mut jobs = UPLOAD_JOBS.lock().await;
                         jobs.remove(&meeting_id_clone);
                         return;

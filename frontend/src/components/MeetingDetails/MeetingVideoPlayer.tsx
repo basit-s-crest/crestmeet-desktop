@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useGoogleDriveUpload } from "@/contexts/GoogleDriveUploadContext";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface MeetingVideoPlayerProps {
   meetingId?: string;
@@ -51,8 +52,17 @@ export function MeetingVideoPlayer({
   const [isLargeSize, setIsLargeSize] = useState<boolean>(false);
   const [isCheckingVideo, setIsCheckingVideo] = useState<boolean>(true);
 
+  const { user } = useAuth();
   const { activeUploads, driveStatus, connectDrive, retryUpload } = useGoogleDriveUpload();
   const currentUpload = meetingId ? activeUploads[meetingId] : undefined;
+
+  const isRecorder = Boolean(
+    recorderId
+      ? user?.id && recorderId.toLowerCase() === user.id.toLowerCase()
+      : recorderEmail
+        ? user?.email && recorderEmail.toLowerCase() === user.email.toLowerCase()
+        : true
+  );
 
   // Derive effective drive file id & status from props or live background upload
   const effectiveDriveFileId = currentUpload?.drive_file_id || driveFileId;
@@ -484,7 +494,7 @@ export function MeetingVideoPlayer({
       </div>
 
       <div className="mt-2 pt-1.5 border-t border-gray-100">
-        {hasLocalVideo && meetingId && folderPath ? (
+        {isRecorder && hasLocalVideo && meetingId && folderPath ? (
           <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] text-gray-500">
               Sync this video to Google Drive so your teammates and other devices can stream it.
@@ -499,7 +509,9 @@ export function MeetingVideoPlayer({
           </div>
         ) : (
           <p className="text-[10px] text-gray-500">
-            This meeting was recorded on another device. Open CrestMeet on {recorderEmail || "the recording device"} and click &quot;Sync to Drive&quot; to enable cloud playback here.
+            {isRecorder
+              ? `This meeting was recorded on another device. Open CrestMeet on the recording device and click "Sync to Drive" to enable cloud playback here.`
+              : `Pending upload by ${recorderEmail ? (recorderEmail.includes('@') ? recorderEmail.split('@')[0] : recorderEmail) : "the recorder"}. Only the recorder can upload this video to Google Drive.`}
           </p>
         )}
       </div>

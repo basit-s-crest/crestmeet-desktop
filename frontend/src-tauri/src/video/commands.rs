@@ -219,45 +219,9 @@ pub async fn api_merge_meeting_video_and_audio(folder_path: String) -> Result<St
                 return Err(format!("FFmpeg merge failed: {}", stderr));
             }
         }
-    } else if let (None, Some(a_path)) = (&video_path, &audio_path) {
-        log_info!(
-            "🎧 Packaging audio-only meeting ({:?}) into streaming MP4 -> {:?}",
-            a_path,
-            output_path
-        );
-
-        // Audio-only: generate an MP4 with a dark slate backdrop so Google Drive and players stream it natively
-        let mut command = std::process::Command::new(&ffmpeg_path);
-        command.args(&[
-            "-y",
-            "-f", "lavfi",
-            "-i", "color=c=0x0f172a:s=1280x720:r=1",
-            "-i", a_path.to_str().unwrap(),
-            "-c:v", "libx264",
-            "-tune", "stillimage",
-            "-preset", "ultrafast",
-            "-crf", "28",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-movflags", "+faststart",
-            "-shortest",
-            output_path.to_str().unwrap(),
-        ]);
-
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            command.creation_flags(CREATE_NO_WINDOW);
-        }
-
-        let output = command.output().map_err(|e| format!("FFmpeg audio-only packaging failed: {}", e))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log_error!("FFmpeg audio-only packaging failed: {}", stderr);
-            return Err(format!("FFmpeg audio packaging failed: {}", stderr));
-        }
+    } else if video_path.is_none() {
+        log_info!("Meeting in {:?} has no video recording (audio-only). Skipping merge.", dir);
+        return Err("Meeting does not have a video recording; audio-only meetings are not merged into video.".to_string());
     } else if let (Some(v_path), None) = (&video_path, &audio_path) {
         log_info!("📹 Transcoding video-only meeting ({:?}) with CRF 20 -> {:?}", v_path, output_path);
         let mut command = std::process::Command::new(&ffmpeg_path);

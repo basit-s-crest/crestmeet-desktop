@@ -27,6 +27,9 @@ export interface CurrentMeeting {
   drive_file_id?: string;
   upload_status?: string;
   folder_path?: string;
+  user_id?: string;
+  user_email?: string;
+  is_local_file_available?: boolean;
 }
 
 // Search result type for transcript search
