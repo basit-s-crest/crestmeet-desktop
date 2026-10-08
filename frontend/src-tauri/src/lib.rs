@@ -805,6 +805,8 @@ pub fn run() {
             google_drive::api_google_drive_resume_upload,
             google_drive::api_start_background_media_processing_and_upload,
             google_drive::api_retry_meeting_drive_upload,
+            google_drive::api_google_drive_ensure_share_permission,
+            google_drive::api_fetch_and_cache_drive_video,
             // Follow-up / Rescheduling extraction
             summary::reschedule_extractor::api_extract_reschedule_info,
             // Cross-Meeting AI Chatbot commands

@@ -1102,12 +1102,22 @@ export default function MeetingsPage() {
                   filteredAndSortedMeetings.map((meeting) => {
                     const liveJob = activeUploads[meeting.id];
                     const syncedInfo = syncedMeetings[meeting.id];
-                    const effectiveDriveFileId = liveJob?.drive_file_id || syncedInfo?.drive_file_id || meeting.drive_file_id;
-                    const effectiveUploadStatus = liveJob?.status || (syncedInfo || effectiveDriveFileId ? 'completed' : meeting.upload_status);
-                    const hasVideo = Boolean(meeting.has_video || effectiveDriveFileId || liveJob);
+                    const extractedFileId =
+                      meeting.drive_file_id ||
+                      (typeof meeting.video_url === 'string'
+                        ? meeting.video_url.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1]
+                        : undefined);
+                    const effectiveDriveFileId =
+                      liveJob?.drive_file_id || syncedInfo?.drive_file_id || extractedFileId;
+                    const effectiveUploadStatus =
+                      liveJob?.status || (syncedInfo || effectiveDriveFileId ? 'completed' : meeting.upload_status);
+                    const hasVideo = Boolean(
+                      meeting.has_video || effectiveDriveFileId || meeting.video_url || liveJob
+                    );
 
                     const isUploaded = Boolean(
-                      effectiveDriveFileId && (effectiveUploadStatus === 'completed' || (effectiveUploadStatus as string) === 'synced')
+                      (effectiveDriveFileId || meeting.video_url) &&
+                      (effectiveUploadStatus === 'completed' || (effectiveUploadStatus as string) === 'synced' || Boolean(meeting.video_url))
                     );
                     const isUploading =
                       effectiveUploadStatus === 'uploading' ||
@@ -1125,7 +1135,9 @@ export default function MeetingsPage() {
                     const canUploadOnThisDevice = isRecorder && hasLocalFile;
                     const driveLink = effectiveDriveFileId
                       ? `https://drive.google.com/file/d/${effectiveDriveFileId}/view`
-                      : meeting.video_url || undefined;
+                      : meeting.video_url
+                        ? meeting.video_url.replace('/preview', '/view')
+                        : undefined;
                     const recorderName = meeting.user_email
                       ? meeting.user_email.includes('@')
                         ? meeting.user_email.split('@')[0]
@@ -1177,21 +1189,24 @@ export default function MeetingsPage() {
                         {hasVideo && (
                           <>
                             {isUploaded ? (
-                              <a
-                                href={driveLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => {
+                              <button
+                                type="button"
+                                onClick={async (e) => {
                                   e.stopPropagation();
                                   if (driveLink) {
-                                    window.open(driveLink, '_blank');
+                                    try {
+                                      await invoke('open_external_url', { url: driveLink });
+                                    } catch (err) {
+                                      console.warn('Failed to open external url:', err);
+                                      window.open(driveLink, '_blank');
+                                    }
                                   }
                                 }}
                                 className="p-2 text-gray-500 hover:text-blue-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
                                 title="Watch video on Google Drive"
                               >
                                 <Video className="w-4 h-4" />
-                              </a>
+                              </button>
                             ) : isUploading ? (
                               <button
                                 type="button"

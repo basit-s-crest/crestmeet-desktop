@@ -66,4 +66,20 @@ export const googleDriveService = {
       folderPath,
     });
   },
+
+  async ensureSharePermission(driveFileId: string): Promise<string> {
+    return invoke<string>('api_google_drive_ensure_share_permission', {
+      driveFileId,
+    });
+  },
+
+  async fetchAndCacheDriveVideo(
+    meetingId: string,
+    driveFileId: string
+  ): Promise<string> {
+    return invoke<string>('api_fetch_and_cache_drive_video', {
+      meetingId,
+      driveFileId,
+    });
+  },
 };

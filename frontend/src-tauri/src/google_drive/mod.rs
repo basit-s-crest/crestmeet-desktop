@@ -513,11 +513,98 @@ async fn get_or_create_crestmeet_folder(client: &Client, access_token: &str) -> 
 /// Supports pause and resume through `control`.
 /// Places file inside dedicated "crestmeet" folder.
 /// Sets reader permission so team members can stream via preview URL.
+/// Sets read permission on a Google Drive file so team members can stream via preview URL.
+/// First attempts to set "type": "anyone", "role": "reader" (public link sharing).
+/// If Google Workspace organization policy blocks "anyone", falls back to "type": "domain".
+pub async fn set_file_share_permissions(
+    client: &Client,
+    access_token: &str,
+    file_id: &str,
+    user_email_hint: Option<&str>,
+) -> Result<String, String> {
+    log_info!("🔑 Setting share permissions for Drive file {}...", file_id);
+
+    // 1. First attempt: public reader ("anyone with the link")
+    let anyone_resp = client
+        .post(format!("https://www.googleapis.com/drive/v3/files/{}/permissions?supportsAllDrives=true", file_id))
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({
+            "role": "reader",
+            "type": "anyone"
+        }))
+        .send()
+        .await;
+
+    match anyone_resp {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                log_info!("✅ Successfully set public reader permission (anyone) on Drive file {}", file_id);
+                return Ok("anyone".to_string());
+            }
+            let err_body = resp.text().await.unwrap_or_default();
+            log_warn!(
+                "⚠️ Drive API returned status {} when setting 'anyone' permission for {}: {}",
+                status, file_id, err_body
+            );
+
+            // If already exists, consider it success
+            if err_body.contains("already exists") {
+                return Ok("anyone".to_string());
+            }
+
+            // 2. Fallback: If blocked (e.g. 403 Google Workspace domain policy), try domain sharing
+            if let Some(email) = user_email_hint {
+                if let Some(domain) = email.split('@').nth(1) {
+                    let d = domain.trim().to_lowercase();
+                    if !d.is_empty() && d != "gmail.com" && d != "googlemail.com" {
+                        log_info!("🔄 Falling back to domain reader permission for domain '{}' on file {}", d, file_id);
+                        let domain_resp = client
+                            .post(format!("https://www.googleapis.com/drive/v3/files/{}/permissions?supportsAllDrives=true", file_id))
+                            .bearer_auth(access_token)
+                            .json(&serde_json::json!({
+                                "role": "reader",
+                                "type": "domain",
+                                "domain": d
+                            }))
+                            .send()
+                            .await;
+
+                        if let Ok(d_resp) = domain_resp {
+                            let d_status = d_resp.status();
+                            if d_status.is_success() {
+                                log_info!("✅ Successfully set domain reader permission for domain '{}' on Drive file {}", d, file_id);
+                                return Ok(format!("domain:{}", d));
+                            }
+                            let d_err = d_resp.text().await.unwrap_or_default();
+                            if d_err.contains("already exists") {
+                                return Ok(format!("domain:{}", d));
+                            }
+                            log_warn!("Domain permission also failed (status {}): {}", d_status, d_err);
+                        }
+                    }
+                }
+            }
+
+            Err(format!("Drive API permission error (status {}): {}", status, err_body))
+        }
+        Err(e) => {
+            log_warn!("Network error while setting permissions for Drive file {}: {}", file_id, e);
+            Err(format!("Network error setting Drive permissions: {}", e))
+        }
+    }
+}
+
+/// Uploads a local video file to Google Drive using resumable upload in 5MB chunks.
+/// Supports pause and resume through `control`.
+/// Places file inside dedicated "crestmeet" folder.
+/// Sets reader permission so team members can stream via preview URL.
 async fn upload_video_file_to_drive<F>(
     access_token: &str,
     file_path: &Path,
     meeting_id: &str,
     control: UploadJobControl,
+    user_email_hint: Option<&str>,
     mut on_progress: F,
 ) -> Result<(String, String), String>
 where
@@ -640,18 +727,9 @@ where
     let file_id = drive_file_id.ok_or_else(|| "Drive upload finished but no file ID was returned".to_string())?;
 
     // Set permission to anyone with link as reader so other org users / team members can stream
-    let perm_resp = client
-        .post(format!("https://www.googleapis.com/drive/v3/files/{}/permissions", file_id))
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({
-            "role": "reader",
-            "type": "anyone"
-        }))
-        .send()
-        .await;
-
-    if let Err(e) = perm_resp {
-        log_warn!("Could not set public reader permission on Drive file {}: {}", file_id, e);
+    let share_res = set_file_share_permissions(&client, access_token, &file_id, user_email_hint).await;
+    if let Err(e) = share_res {
+        log_warn!("Could not set share permission on Drive file {}: {}", file_id, e);
     }
 
     let preview_url = format!("https://drive.google.com/file/d/{}/preview", file_id);
@@ -919,7 +997,8 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
         emit_update(20, "checking_drive", None, None, None);
 
         // Step 2: Check Google Drive access
-        let access_token = match get_valid_access_token(&app_handle, None).await {
+        let user_email_hint = load_tokens(&app_handle, None).and_then(|t| t.user_email);
+        let access_token = match get_valid_access_token(&app_handle, user_email_hint.as_deref()).await {
             Ok(token) => token,
             Err(e) => {
                 log_info!("Google Drive not connected or expired ({}). Keeping local video.", e);
@@ -941,6 +1020,7 @@ pub async fn api_start_background_media_processing_and_upload<R: Runtime>(
             &video_target_path,
             &meeting_id_clone,
             job_ctrl,
+            user_email_hint.as_deref(),
             move |pct, status| {
                 let _ = app_handle_for_progress.emit(
                     "meeting-upload-progress",
@@ -1007,3 +1087,145 @@ pub async fn api_retry_meeting_drive_upload<R: Runtime>(
 ) -> Result<String, String> {
     api_start_background_media_processing_and_upload(app, state, meeting_id, folder_path).await
 }
+
+/// Explicitly ensures or fixes public/domain share permissions on an existing Google Drive file.
+#[tauri::command]
+pub async fn api_google_drive_ensure_share_permission<R: Runtime>(
+    app: AppHandle<R>,
+    drive_file_id: String,
+) -> Result<String, String> {
+    log_info!("🔑 Ensuring share permissions for Drive file: {}", drive_file_id);
+    let tokens = load_tokens(&app, None).ok_or_else(|| "Google Drive is not connected on this device. Please connect Google Drive first.".to_string())?;
+    let access_token = get_valid_access_token(&app, tokens.user_email.as_deref()).await?;
+    let client = Client::new();
+    set_file_share_permissions(&client, &access_token, &drive_file_id, tokens.user_email.as_deref()).await
+}
+
+/// Fetches a Google Drive video file for a meeting, caching it locally so it can be streamed
+/// reliably via native HTML5 video player instead of restricted webview iframes.
+#[tauri::command]
+pub async fn api_fetch_and_cache_drive_video<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    drive_file_id: String,
+) -> Result<String, String> {
+    log_info!("📥 Fetching cloud video for meeting {} (Drive ID: {})", meeting_id, drive_file_id);
+
+    // 1. Determine local cache folder
+    let base_dir = crate::audio::recording_preferences::get_default_recordings_folder_path()
+        .await
+        .map_err(|e| format!("Failed to get recordings directory: {}", e))?;
+    let cache_dir = PathBuf::from(base_dir).join("cloud_cache");
+    if !cache_dir.exists() {
+        let _ = tokio::fs::create_dir_all(&cache_dir).await;
+    }
+
+    let cache_file = cache_dir.join(format!("drive_{}.mp4", drive_file_id));
+    if cache_file.exists() && cache_file.metadata().map(|m| m.len() > 1024).unwrap_or(false) {
+        log_info!("⚡ Using existing cached cloud video: {:?}", cache_file);
+        return Ok(cache_file.to_string_lossy().to_string());
+    }
+
+    // 2. Build HTTP client with reasonable timeout
+    let client = Client::builder()
+        .timeout(Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    // 3. Attempt download
+    // Strategy A: If Google Drive is authenticated on this machine, use official Drive API
+    let token_res = get_valid_access_token(&app, None).await;
+    let mut resp = None;
+
+    if let Ok(ref token) = token_res {
+        log_info!("Attempting authenticated Drive download for file {}...", drive_file_id);
+        let api_url = format!(
+            "https://www.googleapis.com/drive/v3/files/{}?alt=media&supportsAllDrives=true",
+            drive_file_id
+        );
+        if let Ok(r) = client.get(&api_url).bearer_auth(token).send().await {
+            if r.status().is_success() {
+                resp = Some(r);
+            } else {
+                log_warn!("Authenticated Drive download returned status: {}", r.status());
+            }
+        }
+    }
+
+    // Strategy B: If no token or Strategy A returned non-200, try public direct download URLs
+    if resp.is_none() {
+        log_info!("Attempting public direct download for Drive file {}...", drive_file_id);
+        let public_urls = [
+            format!("https://drive.usercontent.google.com/download?id={}&export=download&confirm=t", drive_file_id),
+            format!("https://drive.google.com/uc?export=download&id={}&confirm=t", drive_file_id),
+        ];
+
+        for p_url in &public_urls {
+            match client.get(p_url).send().await {
+                Ok(r) if r.status().is_success() => {
+                    let content_type = r.headers()
+                        .get("content-type")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    // Avoid saving an HTML virus/login page as an MP4
+                    if !content_type.contains("text/html") {
+                        resp = Some(r);
+                        break;
+                    } else {
+                        log_warn!("Public URL returned HTML instead of video content: {}", p_url);
+                    }
+                }
+                Ok(r) => {
+                    log_warn!("Public URL {} returned status {}", p_url, r.status());
+                }
+                Err(e) => {
+                    log_warn!("Failed request to {}: {}", p_url, e);
+                }
+            }
+        }
+    }
+
+    let mut response = resp.ok_or_else(|| {
+        "Unable to stream video from Google Drive. Please ensure the video link is accessible or open it directly in Google Drive.".to_string()
+    })?;
+
+    // 4. Stream response chunks directly to disk
+    let temp_file = cache_dir.join(format!("drive_{}.tmp", drive_file_id));
+    let mut file = tokio::fs::File::create(&temp_file)
+        .await
+        .map_err(|e| format!("Failed to create temporary video file: {}", e))?;
+
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("Error downloading video stream chunk: {}", e))?
+    {
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("Error writing video chunk to disk: {}", e))?;
+    }
+
+    file.flush()
+        .await
+        .map_err(|e| format!("Failed to flush video file: {}", e))?;
+    drop(file);
+
+    // Verify written file is non-empty
+    let meta = tokio::fs::metadata(&temp_file)
+        .await
+        .map_err(|e| format!("Failed to read downloaded file metadata: {}", e))?;
+    if meta.len() < 1024 {
+        let _ = tokio::fs::remove_file(&temp_file).await;
+        return Err("Downloaded file is invalid or too small to be a video".to_string());
+    }
+
+    tokio::fs::rename(&temp_file, &cache_file)
+        .await
+        .map_err(|e| format!("Failed to move cached video file: {}", e))?;
+
+    log_info!("✅ Successfully downloaded and cached cloud video: {:?}", cache_file);
+    Ok(cache_file.to_string_lossy().to_string())
+}
+
