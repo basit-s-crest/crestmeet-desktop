@@ -94,6 +94,28 @@ impl ProjectsRepository {
             return Err("Project name cannot be empty".to_string());
         }
 
+        // Check if user already has an active project with the same name (case-insensitive)
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM projects p
+                LEFT JOIN project_members pm ON p.id = pm.project_id
+                WHERE (p.created_by = $1 OR pm.user_id = $1)
+                  AND LOWER(TRIM(p.name)) = LOWER($2)
+                  AND COALESCE(p.is_archived, false) = false
+            )
+            "#,
+        )
+        .bind(user_id)
+        .bind(clean_name)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if exists {
+            return Err(format!("A project named '{}' already exists. Please choose a different name.", clean_name));
+        }
+
         let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
         let project = sqlx::query_as::<_, Project>(
@@ -167,6 +189,30 @@ impl ProjectsRepository {
         let clean_name = name.trim();
         if clean_name.is_empty() {
             return Err("Project name cannot be empty".to_string());
+        }
+
+        // Check if another active project already has the same name for this user
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM projects p
+                LEFT JOIN project_members pm ON p.id = pm.project_id
+                WHERE (p.created_by = $1 OR pm.user_id = $1)
+                  AND p.id != $3
+                  AND LOWER(TRIM(p.name)) = LOWER($2)
+                  AND COALESCE(p.is_archived, false) = false
+            )
+            "#,
+        )
+        .bind(user_id)
+        .bind(clean_name)
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+
+        if exists {
+            return Err(format!("A project named '{}' already exists. Please choose a different name.", clean_name));
         }
 
         let updated = sqlx::query_as::<_, Project>(

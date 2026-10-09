@@ -91,7 +91,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       toast.success(`Project "${created.name}" created`);
       return created;
     } catch (err: any) {
-      const msg = typeof err === 'string' ? err : 'Failed to create project';
+      const msg = typeof err === 'string' ? err : (err?.message || err?.toString() || 'Failed to create project');
       toast.error(msg);
       throw new Error(msg);
     }
@@ -108,7 +108,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
       toast.success(`Project settings updated`);
       return updated;
     } catch (err: any) {
-      const msg = typeof err === 'string' ? err : 'Failed to update project';
+      const msg = typeof err === 'string' ? err : (err?.message || err?.toString() || 'Failed to update project');
       toast.error(msg);
       throw new Error(msg);
     }
