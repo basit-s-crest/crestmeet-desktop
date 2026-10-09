@@ -17,6 +17,7 @@ import {
   CalendarPlus,
   Sparkles
 } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface GoogleCalendarStatus {
   is_connected: boolean;
@@ -60,6 +61,7 @@ export function ScheduleFollowUpCard({
   hasSummary,
   summaryStatus,
 }: ScheduleFollowUpCardProps) {
+  const { user } = useAuth();
   // Calendar status
   const [calendarStatus, setCalendarStatus] = useState<GoogleCalendarStatus>({
     is_connected: false,
@@ -82,17 +84,23 @@ export function ScheduleFollowUpCard({
 
   // Check Google Calendar connection status
   const checkStatus = useCallback(async () => {
+    if (!user) {
+      setCalendarStatus({ is_connected: false, email: null });
+      return;
+    }
     try {
-      const status = await invoke<GoogleCalendarStatus>('api_google_calendar_get_status');
+      const status = await invoke<GoogleCalendarStatus>('api_google_calendar_get_status', {
+        userIdHint: user.id,
+      });
       setCalendarStatus(status);
     } catch (error) {
       console.warn('Failed to check Google Calendar status:', error);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     checkStatus();
-  }, [checkStatus]);
+  }, [checkStatus, user?.id]);
 
   // Connect Google Calendar via loopback flow (port 3000)
   const handleConnectCalendar = async () => {
@@ -103,7 +111,10 @@ export function ScheduleFollowUpCard({
         duration: 10000,
       });
 
-      const newStatus = await invoke<GoogleCalendarStatus>('api_google_calendar_start_auth');
+      const newStatus = await invoke<GoogleCalendarStatus>('api_google_calendar_start_auth', {
+        userEmailHint: user?.email || null,
+        userIdHint: user?.id || null,
+      });
       setCalendarStatus(newStatus);
       toast.success('Google Calendar connected successfully!', {
         description: newStatus.email ? `Connected as ${newStatus.email}` : undefined,
@@ -196,6 +207,7 @@ export function ScheduleFollowUpCard({
           time_zone: timeZone,
           attendees: currentEvent.attendees.length > 0 ? currentEvent.attendees : null,
         },
+        userIdHint: user?.id || null,
       });
 
       setCreatedEvents((prev) => ({

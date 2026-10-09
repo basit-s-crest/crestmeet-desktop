@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { toast } from 'sonner';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   googleDriveService,
   GoogleDriveStatus,
@@ -26,14 +27,20 @@ interface GoogleDriveUploadContextType {
 const GoogleDriveUploadContext = createContext<GoogleDriveUploadContextType | undefined>(undefined);
 
 export function GoogleDriveUploadProvider({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
   const [driveStatus, setDriveStatus] = useState<GoogleDriveStatus | null>(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState<boolean>(true);
   const [activeUploads, setActiveUploads] = useState<Record<string, UploadProgressPayload>>({});
   const [syncedMeetings, setSyncedMeetings] = useState<Record<string, { drive_file_id: string; video_url?: string }>>({});
 
   const refreshDriveStatus = useCallback(async () => {
+    if (!user) {
+      setDriveStatus({ is_connected: false, email: null });
+      setIsLoadingStatus(false);
+      return;
+    }
     try {
-      const status = await googleDriveService.getStatus();
+      const status = await googleDriveService.getStatus(user.id);
       setDriveStatus(status);
       if (status.is_connected) {
         // Clear any stale 'not_connected' banner jobs when Drive is verified connected
@@ -60,11 +67,11 @@ export function GoogleDriveUploadProvider({ children }: { children: React.ReactN
     } finally {
       setIsLoadingStatus(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     refreshDriveStatus();
-  }, [refreshDriveStatus]);
+  }, [refreshDriveStatus, user?.id]);
 
   // Listen to background upload events from Tauri
   useEffect(() => {
@@ -131,7 +138,8 @@ export function GoogleDriveUploadProvider({ children }: { children: React.ReactN
       toast.info('Connecting to Google Drive...', {
         description: 'Please approve access in your browser window.',
       });
-      const status = await googleDriveService.startAuth(emailHint);
+      const effectiveEmailHint = emailHint || user?.email;
+      const status = await googleDriveService.startAuth(effectiveEmailHint, user?.id);
       setDriveStatus(status);
       if (status.is_connected) {
         toast.success('Google Drive Connected!', {
@@ -159,17 +167,17 @@ export function GoogleDriveUploadProvider({ children }: { children: React.ReactN
       });
       return false;
     }
-  }, []);
+  }, [user]);
 
   const disconnectDrive = useCallback(async () => {
     try {
-      await googleDriveService.disconnect();
+      await googleDriveService.disconnect(user?.id);
       setDriveStatus({ is_connected: false, email: null });
       toast.info('Google Drive Disconnected');
     } catch (err) {
       console.error('Failed to disconnect Google Drive:', err);
     }
-  }, []);
+  }, [user?.id]);
 
   const dismissUpload = useCallback((meetingId: string) => {
     setActiveUploads((prev) => {

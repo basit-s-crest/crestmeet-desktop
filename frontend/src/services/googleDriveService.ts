@@ -23,18 +23,23 @@ export interface UploadProgressPayload {
 }
 
 export const googleDriveService = {
-  async getStatus(): Promise<GoogleDriveStatus> {
-    return invoke<GoogleDriveStatus>('api_google_drive_get_status');
-  },
-
-  async startAuth(userEmailHint?: string): Promise<GoogleDriveStatus> {
-    return invoke<GoogleDriveStatus>('api_google_drive_start_auth', {
-      userEmailHint: userEmailHint || null,
+  async getStatus(userIdHint?: string): Promise<GoogleDriveStatus> {
+    return invoke<GoogleDriveStatus>('api_google_drive_get_status', {
+      userIdHint: userIdHint || null,
     });
   },
 
-  async disconnect(): Promise<void> {
-    return invoke<void>('api_google_drive_disconnect');
+  async startAuth(userEmailHint?: string, userIdHint?: string): Promise<GoogleDriveStatus> {
+    return invoke<GoogleDriveStatus>('api_google_drive_start_auth', {
+      userEmailHint: userEmailHint || null,
+      userIdHint: userIdHint || null,
+    });
+  },
+
+  async disconnect(userIdHint?: string): Promise<void> {
+    return invoke<void>('api_google_drive_disconnect', {
+      userIdHint: userIdHint || null,
+    });
   },
 
   async pauseUpload(meetingId: string): Promise<boolean> {
