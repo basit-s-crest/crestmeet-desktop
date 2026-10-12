@@ -2,10 +2,13 @@ use log::info;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_store::StoreExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use uuid::Uuid;
+
+use crate::state::AppState;
 
 const REDIRECT_URI: &str = "http://localhost:3000/api/calendar/auth/callback";
 const SCOPES: &str = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
@@ -160,34 +163,149 @@ fn open_browser(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Load tokens from the store
-fn load_tokens<R: Runtime>(app: &AppHandle<R>, email_hint: Option<&str>) -> Option<GoogleCalendarTokens> {
-    let store = app.store(STORE_FILENAME).ok()?;
-    if let Some(email) = email_hint {
-        let account_key = format!("account:{}", email.trim().to_lowercase());
-        if let Some(val) = store.get(&account_key) {
-            if let Ok(tok) = serde_json::from_value::<GoogleCalendarTokens>(val) {
-                return Some(tok);
+async fn resolve_user_context(
+    state: &State<'_, AppState>,
+    user_id_hint: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let mut user_id_str = None;
+    let mut email = None;
+
+    if let Some(hint) = user_id_hint {
+        let trimmed = hint.trim();
+        if !trimmed.is_empty() {
+            if trimmed.contains('@') {
+                email = Some(trimmed.to_lowercase());
+            } else {
+                user_id_str = Some(trimmed.to_string());
             }
         }
     }
-    let val = store.get("tokens")?;
-    serde_json::from_value::<GoogleCalendarTokens>(val).ok()
+
+    if user_id_str.is_none() {
+        if let Some(uid) = *state.current_user_id.read().await {
+            user_id_str = Some(uid.to_string());
+        }
+    }
+
+    if email.is_none() {
+        if let Some(ref uid_str) = user_id_str {
+            if let Ok(uid) = Uuid::parse_str(uid_str) {
+                let pool = state.db_manager.pool();
+                if let Ok(Some(row_email)) = sqlx::query_scalar::<_, String>(
+                    "SELECT email FROM app_users WHERE id = $1"
+                )
+                .bind(uid)
+                .fetch_optional(pool)
+                .await
+                {
+                    email = Some(row_email.to_lowercase());
+                }
+            }
+        }
+    }
+
+    (user_id_str, email)
+}
+
+/// Load tokens from the store
+fn load_tokens<R: Runtime>(
+    app: &AppHandle<R>,
+    user_id: Option<&str>,
+    user_email: Option<&str>,
+) -> Option<GoogleCalendarTokens> {
+    if user_id.is_none() && user_email.is_none() {
+        return None;
+    }
+
+    let store = app.store(STORE_FILENAME).ok()?;
+
+    // 1. Check by user ID key
+    if let Some(uid) = user_id {
+        let trimmed = uid.trim();
+        if !trimmed.is_empty() {
+            let key = format!("user:{}", trimmed.to_lowercase());
+            if let Some(val) = store.get(&key) {
+                if let Ok(tok) = serde_json::from_value::<GoogleCalendarTokens>(val) {
+                    return Some(tok);
+                }
+            }
+        }
+    }
+
+    // 2. Check by email key
+    if let Some(em) = user_email {
+        let trimmed = em.trim();
+        if !trimmed.is_empty() {
+            let key = format!("account:{}", trimmed.to_lowercase());
+            if let Some(val) = store.get(&key) {
+                if let Ok(tok) = serde_json::from_value::<GoogleCalendarTokens>(val) {
+                    return Some(tok);
+                }
+            }
+        }
+    }
+
+    // 3. Migration check: migrate old legacy "tokens" entry if authorized email matches user
+    if let Some(val) = store.get("tokens") {
+        if let Ok(legacy_tokens) = serde_json::from_value::<GoogleCalendarTokens>(val) {
+            let mut matches = false;
+            if let Some(ref leg_email) = legacy_tokens.user_email {
+                let leg_clean = leg_email.trim().to_lowercase();
+                if let Some(em) = user_email {
+                    if em.trim().to_lowercase() == leg_clean {
+                        matches = true;
+                    }
+                }
+            }
+            if matches {
+                let _ = store.delete("tokens");
+                let _ = save_tokens(app, user_id, user_email, &legacy_tokens);
+                return Some(legacy_tokens);
+            }
+        }
+    }
+
+    None
 }
 
 /// Save tokens to the store
-fn save_tokens<R: Runtime>(app: &AppHandle<R>, tokens: &GoogleCalendarTokens) -> Result<(), String> {
+fn save_tokens<R: Runtime>(
+    app: &AppHandle<R>,
+    user_id: Option<&str>,
+    user_email: Option<&str>,
+    tokens: &GoogleCalendarTokens,
+) -> Result<(), String> {
     let store = app
         .store(STORE_FILENAME)
         .map_err(|e| format!("Failed to open store: {}", e))?;
     let val = serde_json::to_value(tokens).map_err(|e| format!("Failed to serialize tokens: {}", e))?;
-    store.set("tokens", val.clone());
-    if let Some(ref email) = tokens.user_email {
-        if !email.trim().is_empty() {
-            let account_key = format!("account:{}", email.trim().to_lowercase());
-            store.set(account_key, val);
+
+    if let Some(uid) = user_id {
+        let trimmed = uid.trim();
+        if !trimmed.is_empty() {
+            let key = format!("user:{}", trimmed.to_lowercase());
+            store.set(key, val.clone());
         }
     }
+
+    if let Some(em) = user_email {
+        let trimmed = em.trim();
+        if !trimmed.is_empty() {
+            let key = format!("account:{}", trimmed.to_lowercase());
+            store.set(key, val.clone());
+        }
+    }
+
+    if let Some(ref g_email) = tokens.user_email {
+        let trimmed = g_email.trim();
+        if !trimmed.is_empty() {
+            let key = format!("account:{}", trimmed.to_lowercase());
+            store.set(key, val);
+        }
+    }
+
+    let _ = store.delete("tokens");
+
     store
         .save()
         .map_err(|e| format!("Failed to save store to disk: {}", e))?;
@@ -195,8 +313,12 @@ fn save_tokens<R: Runtime>(app: &AppHandle<R>, tokens: &GoogleCalendarTokens) ->
 }
 
 /// Refresh the access token using refresh_token if expired or close to expiry
-async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>, email_hint: Option<&str>) -> Result<String, String> {
-    let mut tokens = load_tokens(app, email_hint).ok_or_else(|| "Google Calendar is not connected".to_string())?;
+async fn get_valid_access_token<R: Runtime>(
+    app: &AppHandle<R>,
+    user_id: Option<&str>,
+    user_email_hint: Option<&str>,
+) -> Result<String, String> {
+    let mut tokens = load_tokens(app, user_id, user_email_hint).ok_or_else(|| "Google Calendar is not connected".to_string())?;
     let now = current_timestamp_secs();
 
     // If token has at least 60 seconds before expiration, use it
@@ -211,7 +333,7 @@ async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>, email_hint: Opti
         .as_ref()
         .ok_or_else(|| "No refresh token available; please reconnect Google Calendar".to_string())?;
 
-    let effective_email = tokens.user_email.as_deref().or(email_hint);
+    let effective_email = tokens.user_email.as_deref().or(user_email_hint);
     let client_id = get_client_id(effective_email)?;
     let client_secret = get_client_secret(effective_email)?;
 
@@ -247,15 +369,18 @@ async fn get_valid_access_token<R: Runtime>(app: &AppHandle<R>, email_hint: Opti
         tokens.expires_at = Some(now + exp);
     }
 
-    save_tokens(app, &tokens)?;
+    save_tokens(app, user_id, user_email_hint, &tokens)?;
     Ok(tokens.access_token)
 }
 
 #[tauri::command]
 pub async fn api_google_calendar_get_status<R: Runtime>(
     app: AppHandle<R>,
+    state: State<'_, AppState>,
+    user_id_hint: Option<String>,
 ) -> Result<GoogleCalendarStatus, String> {
-    if let Some(tokens) = load_tokens(&app, None) {
+    let (user_id, user_email) = resolve_user_context(&state, user_id_hint).await;
+    if let Some(tokens) = load_tokens(&app, user_id.as_deref(), user_email.as_deref()) {
         if !tokens.access_token.is_empty() {
             return Ok(GoogleCalendarStatus {
                 is_connected: true,
@@ -272,21 +397,37 @@ pub async fn api_google_calendar_get_status<R: Runtime>(
 #[tauri::command]
 pub async fn api_google_calendar_disconnect<R: Runtime>(
     app: AppHandle<R>,
+    state: State<'_, AppState>,
+    user_id_hint: Option<String>,
 ) -> Result<(), String> {
+    let (user_id, user_email) = resolve_user_context(&state, user_id_hint).await;
     if let Ok(store) = app.store(STORE_FILENAME) {
-        store.clear();
+        if let Some(ref uid) = user_id {
+            let key = format!("user:{}", uid.trim().to_lowercase());
+            let _ = store.delete(&key);
+        }
+        if let Some(ref em) = user_email {
+            let key = format!("account:{}", em.trim().to_lowercase());
+            let _ = store.delete(&key);
+        }
+        let _ = store.delete("tokens");
         let _ = store.save();
     }
-    info!("Google Calendar disconnected");
+    info!("Google Calendar disconnected for user: {:?}", user_id);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn api_google_calendar_start_auth<R: Runtime>(
     app: AppHandle<R>,
+    state: State<'_, AppState>,
+    user_email_hint: Option<String>,
+    user_id_hint: Option<String>,
 ) -> Result<GoogleCalendarStatus, String> {
-    let client_id = get_client_id(None)?;
-    let client_secret = get_client_secret(None)?;
+    let (resolved_uid, resolved_email) = resolve_user_context(&state, user_id_hint).await;
+    let effective_email = user_email_hint.or(resolved_email);
+    let client_id = get_client_id(effective_email.as_deref())?;
+    let client_secret = get_client_secret(effective_email.as_deref())?;
 
     info!("Starting Google Calendar OAuth flow on loopback port 3000...");
 
@@ -429,7 +570,7 @@ pub async fn api_google_calendar_start_auth<R: Runtime>(
         user_email: user_email.clone(),
     };
 
-    save_tokens(&app, &tokens)?;
+    save_tokens(&app, resolved_uid.as_deref(), effective_email.as_deref(), &tokens)?;
     info!("Google Calendar successfully connected for email: {:?}", user_email);
 
     Ok(GoogleCalendarStatus {
@@ -441,9 +582,12 @@ pub async fn api_google_calendar_start_auth<R: Runtime>(
 #[tauri::command]
 pub async fn api_google_calendar_create_event<R: Runtime>(
     app: AppHandle<R>,
+    state: State<'_, AppState>,
     payload: CalendarEventPayload,
+    user_id_hint: Option<String>,
 ) -> Result<CreateEventResponse, String> {
-    let access_token = get_valid_access_token(&app, None).await?;
+    let (user_id, user_email) = resolve_user_context(&state, user_id_hint).await;
+    let access_token = get_valid_access_token(&app, user_id.as_deref(), user_email.as_deref()).await?;
     let client = Client::new();
 
     let mut body = serde_json::json!({

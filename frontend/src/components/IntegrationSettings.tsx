@@ -14,6 +14,7 @@ import {
   ExternalLink,
   ShieldAlert,
 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "./ui/button";
 
 interface GoogleServiceStatus {
@@ -22,6 +23,7 @@ interface GoogleServiceStatus {
 }
 
 export function IntegrationSettings() {
+  const { user } = useAuth();
   const [driveStatus, setDriveStatus] = useState<GoogleServiceStatus | null>(null);
   const [calendarStatus, setCalendarStatus] = useState<GoogleServiceStatus | null>(null);
   const [loadingDrive, setLoadingDrive] = useState(false);
@@ -29,13 +31,22 @@ export function IntegrationSettings() {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const fetchStatuses = useCallback(async () => {
+    if (!user) {
+      setDriveStatus({ is_connected: false, email: null });
+      setCalendarStatus({ is_connected: false, email: null });
+      return;
+    }
     try {
       const [drive, calendar] = await Promise.all([
-        invoke<GoogleServiceStatus>("api_google_drive_get_status").catch(() => ({
+        invoke<GoogleServiceStatus>("api_google_drive_get_status", {
+          userIdHint: user.id,
+        }).catch(() => ({
           is_connected: false,
           email: null,
         })),
-        invoke<GoogleServiceStatus>("api_google_calendar_get_status").catch(() => ({
+        invoke<GoogleServiceStatus>("api_google_calendar_get_status", {
+          userIdHint: user.id,
+        }).catch(() => ({
           is_connected: false,
           email: null,
         })),
@@ -45,11 +56,11 @@ export function IntegrationSettings() {
     } catch (err) {
       console.error("Failed to fetch integration statuses:", err);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     fetchStatuses();
-  }, [fetchStatuses]);
+  }, [fetchStatuses, user?.id]);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -63,7 +74,8 @@ export function IntegrationSettings() {
     try {
       toast.info("Opening browser for Google Drive authorization...");
       const status = await invoke<GoogleServiceStatus>("api_google_drive_start_auth", {
-        userEmailHint: null,
+        userEmailHint: user?.email || null,
+        userIdHint: user?.id || null,
       });
       setDriveStatus(status);
       toast.success(
@@ -83,7 +95,9 @@ export function IntegrationSettings() {
   const handleDisconnectDrive = async () => {
     setLoadingDrive(true);
     try {
-      await invoke("api_google_drive_disconnect");
+      await invoke("api_google_drive_disconnect", {
+        userIdHint: user?.id || null,
+      });
       setDriveStatus({ is_connected: false, email: null });
       toast.success("Disconnected Google Drive");
     } catch (err: any) {
@@ -100,7 +114,8 @@ export function IntegrationSettings() {
     try {
       toast.info("Opening browser for Google Calendar authorization...");
       const status = await invoke<GoogleServiceStatus>("api_google_calendar_start_auth", {
-        userEmailHint: null,
+        userEmailHint: user?.email || null,
+        userIdHint: user?.id || null,
       });
       setCalendarStatus(status);
       toast.success(
@@ -120,7 +135,9 @@ export function IntegrationSettings() {
   const handleDisconnectCalendar = async () => {
     setLoadingCalendar(true);
     try {
-      await invoke("api_google_calendar_disconnect");
+      await invoke("api_google_calendar_disconnect", {
+        userIdHint: user?.id || null,
+      });
       setCalendarStatus({ is_connected: false, email: null });
       toast.success("Disconnected Google Calendar");
     } catch (err: any) {

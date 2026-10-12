@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -10,8 +10,9 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { FolderPlus, Loader2 } from 'lucide-react';
+import { FolderPlus, Loader2, AlertCircle } from 'lucide-react';
 import { useProject } from '@/contexts/ProjectContext';
+import { toast } from 'sonner';
 
 interface CreateProjectDialogProps {
   isOpen: boolean;
@@ -19,23 +20,46 @@ interface CreateProjectDialogProps {
 }
 
 export const CreateProjectDialog: React.FC<CreateProjectDialogProps> = ({ isOpen, onClose }) => {
-  const { createProject } = useProject();
+  const { projects, createProject } = useProject();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setName('');
+      setDescription('');
+      setErrorMessage(null);
+    }
+  }, [isOpen]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    const cleanName = name.trim();
+    if (!cleanName) return;
+
+    // Check if user already has an active project with the same name (case-insensitive)
+    const isDuplicate = projects.some(
+      (p) => !p.is_archived && p.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (isDuplicate) {
+      const err = `A project named "${cleanName}" already exists. Please choose a different name.`;
+      setErrorMessage(err);
+      toast.error(err);
+      return;
+    }
 
     try {
       setIsSubmitting(true);
-      await createProject(name.trim(), description.trim() || undefined);
+      setErrorMessage(null);
+      await createProject(cleanName, description.trim() || undefined);
       setName('');
       setDescription('');
       onClose();
-    } catch (err) {
-      // Error handled by toast in context
+    } catch (err: any) {
+      const msg = typeof err === 'string' ? err : (err?.message || 'Failed to create project');
+      setErrorMessage(msg);
     } finally {
       setIsSubmitting(false);
     }
@@ -61,12 +85,23 @@ export const CreateProjectDialog: React.FC<CreateProjectDialogProps> = ({ isOpen
             <label className="text-xs font-semibold text-slate-700">Project Name *</label>
             <Input
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (errorMessage) setErrorMessage(null);
+              }}
               placeholder="e.g. Mobile App Redesign, Q3 Planning"
-              className="h-10 text-sm rounded-xl border-slate-200 focus-visible:ring-indigo-500 focus-visible:border-indigo-500"
+              className={`h-10 text-sm rounded-xl border-slate-200 focus-visible:ring-indigo-500 focus-visible:border-indigo-500 ${
+                errorMessage ? 'border-red-400 focus-visible:ring-red-400' : ''
+              }`}
               autoFocus
               required
             />
+            {errorMessage && (
+              <div className="flex items-center gap-1.5 text-xs text-red-600 font-medium pt-0.5">
+                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5">
