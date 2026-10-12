@@ -98,6 +98,14 @@ const OVERVIEW_TABS = [
   { id: 'archived', label: 'Archived', icon: Archive },
 ] as const;
 
+// Inside-project view tabs (All Meetings vs My Meetings)
+type ProjectMeetingTab = 'all' | 'my';
+
+const PROJECT_MEETING_TABS = [
+  { id: 'all', label: 'All Meetings', icon: NotebookPen },
+  { id: 'my', label: 'My Meetings', icon: User },
+] as const;
+
 export default function MeetingsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -148,6 +156,11 @@ export default function MeetingsPage() {
   const [overviewTab, setOverviewTab] = useState<'active' | 'archived'>('active');
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [underlineStyle, setUnderlineStyle] = useState({ left: 0, width: 0 });
+
+  // Tab state inside project view: 'all' | 'my'
+  const [projectMeetingTab, setProjectMeetingTab] = useState<ProjectMeetingTab>('all');
+  const projectTabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const [projectUnderlineStyle, setProjectUnderlineStyle] = useState({ left: 0, width: 0 });
 
   // Search & Filter state for inside-project meetings
   const [meetingSearch, setMeetingSearch] = useState('');
@@ -229,9 +242,11 @@ export default function MeetingsPage() {
     if (!selectedProject) {
       setProjectMeetings([]);
       setIsLoadingProjectMeetings(false);
+      setProjectMeetingTab('all');
       return;
     }
 
+    setProjectMeetingTab('all');
     let isCurrent = true;
     setIsLoadingProjectMeetings(true);
     setProjectMeetings([]); // Clear immediately so meetings from previous project never flash or linger
@@ -288,10 +303,23 @@ export default function MeetingsPage() {
     }
   }, [overviewTab, selectedProject]);
 
+  // Update animated tab underline position for project meeting tabs
+  useLayoutEffect(() => {
+    if (!selectedProject) return;
+    const activeIndex = PROJECT_MEETING_TABS.findIndex((tab) => tab.id === projectMeetingTab);
+    const activeTabElement = projectTabRefs.current[activeIndex];
+
+    if (activeTabElement) {
+      const { offsetLeft, offsetWidth } = activeTabElement;
+      setProjectUnderlineStyle({ left: offsetLeft, width: offsetWidth });
+    }
+  }, [projectMeetingTab, selectedProject]);
+
   // Open a specific project's meetings view
   const handleOpenProject = (project: ProjectWithRole) => {
     setSelectedProject(project);
     setMeetingSearch('');
+    setProjectMeetingTab('all');
     router.replace(`/meetings?project=${project.id}`);
     switchProject(project.id).catch(console.error);
   };
@@ -300,6 +328,7 @@ export default function MeetingsPage() {
   const handleBackToProjects = () => {
     setSelectedProject(null);
     setMeetingSearch('');
+    setProjectMeetingTab('all');
     router.replace('/meetings');
   };
 
@@ -360,11 +389,49 @@ export default function MeetingsPage() {
   // Determine if meetings for the selected project are currently loading
   const isProjectMeetingsLoading = isLoadingProjectMeetings;
 
+  // Check if a meeting was created/recorded by the current authenticated user
+  const isMyMeeting = useCallback(
+    (meeting: CurrentMeeting) => {
+      // 1. Direct ID comparison
+      if (meeting.user_id && user?.id) {
+        return meeting.user_id.toLowerCase().trim() === user.id.toLowerCase().trim();
+      }
+
+      // 2. Email comparison
+      if (meeting.user_email && user?.email) {
+        return meeting.user_email.toLowerCase().trim() === user.email.toLowerCase().trim();
+      }
+
+      // 3. If meeting has a user_id or user_email, and neither matched above, it belongs to someone else
+      if (meeting.user_id || meeting.user_email) {
+        return false;
+      }
+
+      // 4. Fallback for unassigned legacy meetings without user_id / user_email:
+      // Only treat as current user's if in a personal workspace or unauthenticated local mode
+      if (!user?.id && !user?.email) {
+        return true;
+      }
+      if (selectedProject?.is_personal) {
+        return true;
+      }
+
+      return false;
+    },
+    [user?.id, user?.email, selectedProject?.is_personal]
+  );
+
   // Total meetings count for selected project
   const selectedProjectMeetingsCount = useMemo(() => {
     if (!selectedProject) return 0;
     return projectMeetings.length;
   }, [projectMeetings, selectedProject]);
+
+  // Total count of current user's meetings in this project
+  const myMeetingsCount = useMemo(() => {
+    if (!selectedProject) return 0;
+    return (projectMeetings || []).filter(isMyMeeting).length;
+  }, [projectMeetings, selectedProject, isMyMeeting]);
 
   // Filter and sort meetings for the inside-project view
   const filteredAndSortedMeetings = useMemo(() => {
@@ -377,6 +444,11 @@ export default function MeetingsPage() {
       }
       return m.project_id === selectedProject.id;
     });
+
+    // Tab filter: 'all' vs 'my'
+    if (projectMeetingTab === 'my') {
+      result = result.filter(isMyMeeting);
+    }
 
     // Name search filter
     if (meetingSearch.trim()) {
@@ -438,12 +510,30 @@ export default function MeetingsPage() {
     });
 
     return result;
-  }, [projectMeetings, selectedProject, meetingSearch, dateFilter, customDateStart, customDateEnd, sortOrder]);
+  }, [
+    projectMeetings,
+    selectedProject,
+    projectMeetingTab,
+    isMyMeeting,
+    meetingSearch,
+    dateFilter,
+    customDateStart,
+    customDateEnd,
+    sortOrder,
+  ]);
 
   // Meeting deletion
   const handleDeleteConfirm = async () => {
     const meetingId = deleteModalState.meetingId;
     if (!meetingId) return;
+
+    // Safety check: only creator can delete their own meeting
+    const targetMeeting = projectMeetings.find((m) => m.id === meetingId);
+    if (targetMeeting && !isMyMeeting(targetMeeting)) {
+      toast.error('Permission denied: You can only delete your own meetings.');
+      setDeleteModalState({ isOpen: false, meetingId: null });
+      return;
+    }
 
     try {
       await invoke('api_delete_meeting', { meetingId });
@@ -674,6 +764,52 @@ export default function MeetingsPage() {
                     className="absolute bottom-0 z-20 h-0.5 bg-blue-600"
                     layoutId="underline"
                     style={{ left: underlineStyle.left, width: underlineStyle.width }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 40 }}
+                  />
+                </TabsList>
+              </Tabs>
+            </div>
+          )}
+
+          {/* Header Tabs Bar — Inside selected project (All Meetings vs My Meetings) */}
+          {selectedProject && (
+            <div className="mt-6">
+              <Tabs
+                value={projectMeetingTab}
+                onValueChange={(val) => setProjectMeetingTab(val as ProjectMeetingTab)}
+              >
+                <TabsList className="bg-transparent relative rounded-none border-b border-gray-200 p-0 h-auto flex gap-1 justify-start">
+                  {PROJECT_MEETING_TABS.map((tab, index) => {
+                    const Icon = tab.icon;
+                    const count = tab.id === 'all' ? selectedProjectMeetingsCount : myMeetingsCount;
+                    return (
+                      <TabsTrigger
+                        key={tab.id}
+                        value={tab.id}
+                        ref={(el) => {
+                          projectTabRefs.current[index] = el;
+                        }}
+                        className="flex items-center gap-2 px-6 py-3.5 bg-transparent rounded-none border-0 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none text-gray-600 hover:text-gray-900 relative z-10 text-sm font-medium transition-colors cursor-pointer"
+                      >
+                        <Icon className="w-4 h-4 shrink-0" />
+                        <span>{tab.label}</span>
+                        <span
+                          className={`text-[11px] px-1.5 py-0.5 rounded-full font-semibold transition-colors ${
+                            projectMeetingTab === tab.id
+                              ? 'bg-blue-100 text-blue-700'
+                              : 'bg-gray-100 text-gray-600'
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      </TabsTrigger>
+                    );
+                  })}
+
+                  <motion.div
+                    className="absolute bottom-0 z-20 h-0.5 bg-blue-600"
+                    layoutId="projectTabUnderline"
+                    style={{ left: projectUnderlineStyle.left, width: projectUnderlineStyle.width }}
                     transition={{ type: 'spring', stiffness: 400, damping: 40 }}
                   />
                 </TabsList>
@@ -1086,7 +1222,11 @@ export default function MeetingsPage() {
                   </span>
                 ) : (
                   <span className="text-xs sm:text-sm font-medium text-gray-600">
-                    Showing {filteredAndSortedMeetings.length} of {selectedProjectMeetingsCount} meetings
+                    Showing {filteredAndSortedMeetings.length} of{' '}
+                    {projectMeetingTab === 'my' ? myMeetingsCount : selectedProjectMeetingsCount}{' '}
+                    {(projectMeetingTab === 'my' ? myMeetingsCount : selectedProjectMeetingsCount) === 1
+                      ? 'meeting'
+                      : 'meetings'}
                   </span>
                 )}
               </div>
@@ -1125,12 +1265,8 @@ export default function MeetingsPage() {
                       effectiveUploadStatus === 'checking_drive';
                     const isPaused = effectiveUploadStatus === 'paused';
 
-                    const isRecorder = Boolean(
-                      meeting.user_id
-                        ? (user?.id && meeting.user_id.toLowerCase() === user.id.toLowerCase()) ||
-                          (meeting.user_email && user?.email && meeting.user_email.toLowerCase() === user.email.toLowerCase())
-                        : true
-                    );
+                    const isRecorder = isMyMeeting(meeting);
+                    const canDelete = isRecorder;
                     const hasLocalFile = Boolean(meeting.is_local_file_available);
                     const canUploadOnThisDevice = isRecorder && hasLocalFile;
                     const driveLink = effectiveDriveFileId
@@ -1155,9 +1291,21 @@ export default function MeetingsPage() {
                           <FileText className="w-5 h-5" />
                         </div>
                         <div className="min-w-0">
-                          <h4 className="text-sm sm:text-base font-semibold text-gray-900 group-hover:text-blue-600 transition-colors truncate">
-                            {cleanMeetingTitle(meeting.title, meeting.created_at)}
-                          </h4>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm sm:text-base font-semibold text-gray-900 group-hover:text-blue-600 transition-colors truncate">
+                              {cleanMeetingTitle(meeting.title, meeting.created_at)}
+                            </h4>
+                            {isRecorder ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                                My meeting
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-gray-100 text-gray-600 border border-gray-200">
+                                <User className="w-3 h-3 text-gray-400" />
+                                <span>{recorderName}</span>
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-gray-500 mt-0.5">
                             {formatMeetingDate(meeting.created_at)} · {formatMeetingTime(meeting.created_at)}
                           </p>
@@ -1285,19 +1433,22 @@ export default function MeetingsPage() {
                           </>
                         )}
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDeleteModalState({
-                              isOpen: true,
-                              meetingId: meeting.id,
-                            })
-                          }
-                          className="p-2 text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                          title="Delete meeting"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {/* Delete button: Only allow deletion of own meetings or if project owner */}
+                        {canDelete && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDeleteModalState({
+                                isOpen: true,
+                                meetingId: meeting.id,
+                              })
+                            }
+                            className="p-2 text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Delete meeting"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
 
                         <Button
                           variant="ghost"
@@ -1314,18 +1465,34 @@ export default function MeetingsPage() {
                 })
                 ) : (
                   <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center shadow-2xs">
-                    <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 mx-auto mb-3">
-                      <FileText className="w-6 h-6" />
+                    <div
+                      className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${
+                        projectMeetingTab === 'my'
+                          ? 'bg-blue-50 border border-blue-100 text-blue-600'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {projectMeetingTab === 'my' ? (
+                        <User className="w-6 h-6" />
+                      ) : (
+                        <FileText className="w-6 h-6" />
+                      )}
                     </div>
                     <h3 className="text-base font-semibold text-gray-900">
-                      {meetingSearch || dateFilter !== 'all' ? 'No matching meetings' : 'No meetings in this project yet'}
+                      {meetingSearch || dateFilter !== 'all'
+                        ? 'No matching meetings'
+                        : projectMeetingTab === 'my'
+                        ? 'No meetings recorded by you yet'
+                        : 'No meetings in this project yet'}
                     </h3>
                     <p className="text-sm text-gray-500 mt-1 max-w-sm mx-auto">
                       {meetingSearch || dateFilter !== 'all'
                         ? 'Try adjusting your search query or clear the filter.'
+                        : projectMeetingTab === 'my'
+                        ? 'Meetings you record in this project will appear here. You can view, review, and delete your own recordings.'
                         : 'Recordings made while this project is active will be automatically organized here.'}
                     </p>
-                    {meetingSearch && (
+                    {meetingSearch ? (
                       <div className="mt-4 flex items-center justify-center gap-2">
                         <Button
                           variant="outline"
@@ -1336,6 +1503,20 @@ export default function MeetingsPage() {
                           Clear Search
                         </Button>
                       </div>
+                    ) : (
+                      !selectedProject.is_archived && (
+                        <Button
+                          onClick={handleRecordForCurrentProject}
+                          className="mt-4 bg-[#DC2626] hover:bg-[#b91c1c] text-white rounded-xl shadow-2xs text-xs font-semibold px-4 h-9"
+                        >
+                          <Mic className="w-3.5 h-3.5 mr-1.5" />
+                          <span>
+                            {projectMeetingTab === 'my'
+                              ? 'Record a call'
+                              : 'Record your first call'}
+                          </span>
+                        </Button>
+                      )
                     )}
                   </div>
                 )}

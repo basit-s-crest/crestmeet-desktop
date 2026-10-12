@@ -955,36 +955,13 @@ pub async fn api_delete_meeting<R: Runtime>(
 
     let mut allowed = false;
 
-    // 1. Check if meeting has no user_id (legacy meeting)
-    if meeting.user_id.is_none() {
-        allowed = true;
-    }
-
-    // 2. Check if current user is the creator of the meeting
+    // Check if current user is the creator of the meeting (or legacy meeting without user_id)
     if let (Some(curr), Some(creator)) = (current_user_id, meeting.user_id) {
         if curr == creator {
             allowed = true;
         }
-    }
-
-    // 3. Check if current user is the project owner
-    if !allowed {
-        if let (Some(curr), Some(pid)) = (current_user_id, meeting.project_id) {
-            let role: Option<String> = sqlx::query_scalar(
-                "SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2"
-            )
-            .bind(pid)
-            .bind(curr)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or(None);
-
-            if let Some(r) = role {
-                if r == "owner" {
-                    allowed = true;
-                }
-            }
-        }
+    } else if meeting.user_id.is_none() {
+        allowed = true;
     }
 
     if !allowed {
@@ -993,7 +970,7 @@ pub async fn api_delete_meeting<R: Runtime>(
             current_user_id,
             meeting_id
         );
-        return Err("Permission denied: Only the meeting recorder or project owner can delete this meeting.".to_string());
+        return Err("Permission denied: You can only delete your own meetings.".to_string());
     }
 
     match MeetingsRepository::delete_meeting(pool, &meeting_id).await {

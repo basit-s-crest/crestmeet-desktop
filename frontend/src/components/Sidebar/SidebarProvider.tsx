@@ -132,6 +132,9 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
             drive_file_id: meeting.drive_file_id,
             upload_status: meeting.upload_status,
             folder_path: meeting.folder_path,
+            user_id: meeting.user_id,
+            user_email: meeting.user_email,
+            is_local_file_available: meeting.is_local_file_available,
           }));
           setMeetings(transformedMeetings);
         }
