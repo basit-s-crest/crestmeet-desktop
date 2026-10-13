@@ -22,10 +22,16 @@ use crate::state::AppState;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeetingCitation {
+    pub label: Option<String>,
     pub meeting_id: String,
     pub meeting_title: String,
     pub date: String,
     pub snippet: Option<String>,
+    pub start_seconds: Option<f64>,
+    pub end_seconds: Option<f64>,
+    pub speaker: Option<String>,
+    pub project_name: Option<String>,
+    pub chunk_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,25 +321,197 @@ async fn fetch_recent_meetings(
         .collect()
 }
 
+/// Strip raw [S#] citations from past assistant turns to avoid label collisions
+fn strip_source_tags(text: &str) -> String {
+    let re = regex::Regex::new(r"\[S\d+\]").ok();
+    if let Some(r) = re {
+        r.replace_all(text, "").to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConversationMemory {
+    pub anchored_intent: Option<String>,
+    pub rolling_summary: Option<String>,
+    pub recent_turns: Vec<(String, String)>,
+    pub total_prior_messages: i32,
+}
+
+/// Load conversation memory: rolling summary, anchored initial intent, and recent 6 turns
+async fn load_conversation_memory(
+    pool: &PgPool,
+    session_id: &str,
+    current_user: Option<Uuid>,
+) -> ConversationMemory {
+    let s_uuid = Uuid::parse_str(session_id).ok();
+    let session_row = if let Some(sid) = s_uuid {
+        sqlx::query_as::<_, (Option<String>, i32)>(
+            "SELECT summary, message_count FROM chat_sessions WHERE id = $1",
+        )
+        .bind(sid)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+
+    let (rolling_summary, total_prior_messages) = match session_row {
+        Some((sum, count)) => (sum, count),
+        None => (None, 0),
+    };
+
+    let msg_rows = if let Some(uid) = current_user {
+        sqlx::query_as::<_, (String, String)>(
+            r#"
+            SELECT role, content
+            FROM chat_messages
+            WHERE user_id = $1 AND (chat_session_id = $2 OR session_id::text = $2)
+            ORDER BY created_at ASC
+            LIMIT 25
+            "#,
+        )
+        .bind(uid)
+        .bind(session_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+    } else {
+        sqlx::query_as::<_, (String, String)>(
+            r#"
+            SELECT role, content
+            FROM chat_messages
+            WHERE chat_session_id = $1 OR session_id::text = $1
+            ORDER BY created_at ASC
+            LIMIT 25
+            "#,
+        )
+        .bind(session_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default()
+    };
+
+    let anchored_intent = msg_rows
+        .iter()
+        .find(|(role, _)| role == "user")
+        .map(|(_, content)| content.clone());
+
+    let recent_len = msg_rows.len();
+    let start_idx = if recent_len > 6 { recent_len - 6 } else { 0 };
+    let recent_turns: Vec<(String, String)> = msg_rows[start_idx..]
+        .iter()
+        .map(|(role, content)| {
+            let sanitized = if role == "assistant" {
+                strip_source_tags(content)
+            } else {
+                content.clone()
+            };
+            (role.clone(), sanitized)
+        })
+        .collect();
+
+    ConversationMemory {
+        anchored_intent,
+        rolling_summary,
+        recent_turns,
+        total_prior_messages,
+    }
+}
+
+/// Rewrite conversational follow-up query into a standalone search query
+async fn rewrite_query_for_search(
+    api_key: &str,
+    model_name: &str,
+    query: &str,
+    memory: &ConversationMemory,
+) -> String {
+    if memory.recent_turns.is_empty() {
+        return query.to_string();
+    }
+
+    let q_lower = query.to_lowercase();
+    let has_reference = q_lower.split_whitespace().any(|w| {
+        matches!(
+            w.trim_matches(|c: char| !c.is_alphanumeric()),
+            "it" | "this" | "that" | "they" | "he" | "she" | "them" | "these" | "those" |
+            "what" | "who" | "when" | "why" | "where" | "how" | "more" | "further" | "again" | "same"
+        )
+    }) || query.split_whitespace().count() <= 8;
+
+    if !has_reference {
+        return query.to_string();
+    }
+
+    let mut recent_snippet = String::new();
+    let len = memory.recent_turns.len();
+    let slice_start = if len > 4 { len - 4 } else { 0 };
+    for (role, text) in &memory.recent_turns[slice_start..] {
+        let prefix = if role == "user" { "User" } else { "Assistant" };
+        let excerpt: String = text.chars().take(220).collect();
+        recent_snippet.push_str(&format!("{}: {}\n", prefix, excerpt));
+    }
+
+    let rewrite_prompt = format!(
+        "Given the recent conversation history:\n{}\n\nUser's follow-up question: \"{}\"\n\nRewrite this follow-up question into a single clear, standalone search query that preserves the entities and context from the conversation. Return ONLY the rewritten query text, with no quotes or additional explanation.",
+        recent_snippet,
+        query
+    );
+
+    let rewritten = call_groq_synthesize(
+        api_key,
+        model_name,
+        "You are an expert search query rewriter. Return only the rewritten search query.",
+        &rewrite_prompt,
+    )
+    .await;
+
+    match rewritten {
+        Ok(res) => {
+            let trimmed = res.trim().trim_matches('"').trim().to_string();
+            if !trimmed.is_empty() && trimmed.len() < 300 {
+                info!("Rewrote follow-up query '{}' -> '{}'", query, trimmed);
+                trimmed
+            } else {
+                query.to_string()
+            }
+        }
+        Err(_) => query.to_string(),
+    }
+}
+
 /// Extract verified citations from answer referencing either [S#] or [[meeting_id: Title]]
 fn extract_verified_citations(
     answer: &str,
     chunks: &[RetrievedKnowledgeChunk],
 ) -> Vec<MeetingCitation> {
     let mut citations = Vec::new();
-    let mut seen_ids = HashSet::new();
+    let mut seen_keys = HashSet::new();
 
     // 1. Check numeric source markers [S1], [S2]...
     for (idx, c) in chunks.iter().enumerate() {
         let tag = format!("[S{}]", idx + 1);
-        if answer.contains(&tag) && !seen_ids.contains(&c.meeting_id) {
-            seen_ids.insert(c.meeting_id.clone());
-            citations.push(MeetingCitation {
-                meeting_id: c.meeting_id.clone(),
-                meeting_title: c.meeting_title.clone(),
-                date: c.meeting_date.format("%Y-%m-%d").to_string(),
-                snippet: Some(c.content.chars().take(140).collect()),
-            });
+        if answer.contains(&tag) {
+            let sec_key = c.start_seconds.map(|s| s.round() as i64);
+            let key = (c.meeting_id.clone(), sec_key);
+            if !seen_keys.contains(&key) {
+                seen_keys.insert(key);
+                citations.push(MeetingCitation {
+                    label: Some(format!("S{}", idx + 1)),
+                    meeting_id: c.meeting_id.clone(),
+                    meeting_title: c.meeting_title.clone(),
+                    date: c.meeting_date.format("%Y-%m-%d").to_string(),
+                    snippet: Some(c.content.chars().take(160).collect()),
+                    start_seconds: c.start_seconds,
+                    end_seconds: c.end_seconds,
+                    speaker: c.speakers.first().cloned(),
+                    project_name: Some(c.project_name.clone()),
+                    chunk_id: Some(c.chunk_id.to_string()),
+                });
+            }
         }
     }
 
@@ -347,19 +525,25 @@ fn extract_verified_citations(
                 let id = parts[0].trim().to_string();
                 let title = parts[1].trim().to_string();
 
-                if !seen_ids.contains(&id) {
-                    seen_ids.insert(id.clone());
-                    let date = chunks
-                        .iter()
-                        .find(|c| c.meeting_id == id)
+                let key = (id.clone(), None);
+                if !seen_keys.contains(&key) {
+                    seen_keys.insert(key);
+                    let matched_chunk = chunks.iter().find(|c| c.meeting_id == id);
+                    let date = matched_chunk
                         .map(|c| c.meeting_date.format("%Y-%m-%d").to_string())
                         .unwrap_or_else(|| Utc::now().format("%Y-%m-%d").to_string());
 
                     citations.push(MeetingCitation {
+                        label: None,
                         meeting_id: id,
                         meeting_title: title,
                         date,
-                        snippet: None,
+                        snippet: matched_chunk.map(|c| c.content.chars().take(160).collect()),
+                        start_seconds: matched_chunk.and_then(|c| c.start_seconds),
+                        end_seconds: matched_chunk.and_then(|c| c.end_seconds),
+                        speaker: matched_chunk.and_then(|c| c.speakers.first().cloned()),
+                        project_name: matched_chunk.map(|c| c.project_name.clone()),
+                        chunk_id: matched_chunk.map(|c| c.chunk_id.to_string()),
                     });
                 }
             }
@@ -588,10 +772,22 @@ pub async fn api_chat_send_message_stream(
         }
     };
 
-    // Step 2: Resolve Project Scope & Retrieve Chunks
+    // Step 2: Load Multi-Turn Conversation Memory & Target Model
+    let target_model = model_config
+        .as_ref()
+        .map(|c| c.model.trim())
+        .filter(|m| !m.is_empty() && !m.contains("whisper") && !m.contains("llama"))
+        .unwrap_or("openai/gpt-oss-120b");
+
+    let memory = load_conversation_memory(&pool, &chat_session_id, current_user).await;
+
+    // Step 3: Rewrite follow-up query into standalone search query if needed
+    let search_query = rewrite_query_for_search(&api_key, target_model, &q, &memory).await;
+
+    // Step 4: Resolve Project Scope & Retrieve Chunks
     let project_scope = resolve_session_project_scope(&pool, &chat_session_id, active_pid).await;
-    let keywords = extract_search_keywords(&q);
-    let query_vector_str = fetch_query_embedding_local(&q).await;
+    let keywords = extract_search_keywords(&search_query);
+    let query_vector_str = fetch_query_embedding_local(&search_query).await;
 
     let chunks = search_knowledge_chunks(
         &pool,
@@ -608,11 +804,19 @@ pub async fn api_chat_send_message_stream(
     // Send preliminary sources
     let preliminary_sources: Vec<MeetingCitation> = chunks
         .iter()
-        .map(|c| MeetingCitation {
+        .take(6)
+        .enumerate()
+        .map(|(idx, c)| MeetingCitation {
+            label: Some(format!("S{}", idx + 1)),
             meeting_id: c.meeting_id.clone(),
             meeting_title: c.meeting_title.clone(),
             date: c.meeting_date.format("%Y-%m-%d").to_string(),
-            snippet: Some(c.content.chars().take(120).collect()),
+            snippet: Some(c.content.chars().take(140).collect()),
+            start_seconds: c.start_seconds,
+            end_seconds: c.end_seconds,
+            speaker: c.speakers.first().cloned(),
+            project_name: Some(c.project_name.clone()),
+            chunk_id: Some(c.chunk_id.to_string()),
         })
         .collect();
 
@@ -647,8 +851,26 @@ pub async fn api_chat_send_message_stream(
         return Ok(());
     }
 
-    // Step 3: Construct Synthesis Context
+    // Step 5: Construct Synthesis Context with Multi-Turn Memory & Chunks
     let mut context_builder = String::new();
+
+    // Multi-turn conversation memory integration
+    if let Some(intent) = &memory.anchored_intent {
+        context_builder.push_str(&format!("=== CONVERSATION TOPIC / ORIGINAL INTENT ===\n{}\n\n", intent));
+    }
+
+    if let Some(sum) = &memory.rolling_summary {
+        context_builder.push_str(&format!("=== PRIOR CONVERSATION SUMMARY ===\n{}\n\n", sum));
+    }
+
+    if !memory.recent_turns.is_empty() {
+        context_builder.push_str("=== RECENT CONVERSATION TURNS ===\n");
+        for (role, text) in &memory.recent_turns {
+            let label = if role == "user" { "User" } else { "Assistant" };
+            context_builder.push_str(&format!("{}: {}\n", label, text.trim()));
+        }
+        context_builder.push_str("\n(Note: Prior assistant responses are for conversation continuity. Ground any factual claims about meetings exclusively in the RELEVANT MEETING KNOWLEDGE chunks below).\n\n");
+    }
 
     if !chunks.is_empty() {
         context_builder.push_str("=== RELEVANT MEETING KNOWLEDGE & TRANSCRIPT CHUNKS ===\n");
@@ -702,7 +924,7 @@ pub async fn api_chat_send_message_stream(
         context_builder.push('\n');
     }
 
-    // Step 4: System Instructions for Groq
+    // Step 6: System Instructions for Groq
     let system_prompt = r#"You are CrestMeet's AI Meeting Knowledge Assistant.
 Answer the user's question accurately using ONLY the meeting records and excerpts provided in the context.
 Rules:
@@ -715,12 +937,6 @@ Rules:
         "Context Information:\n{}\n\nUser Question: {}",
         context_builder, q
     );
-
-    let target_model = model_config
-        .as_ref()
-        .map(|c| c.model.trim())
-        .filter(|m| !m.is_empty() && !m.contains("whisper") && !m.contains("llama"))
-        .unwrap_or("openai/gpt-oss-120b");
 
     info!(
         "Streaming Groq synthesis with model '{}' for chat query: '{}' with {} chunks",
@@ -810,6 +1026,94 @@ Rules:
         .await;
     }
 
+    // Step 7: Background auto-titling and rolling summary updates
+    let bg_pool = pool.clone();
+    let bg_sid = chat_session_id.clone();
+    let bg_q = q.clone();
+    let bg_api_key = api_key.clone();
+    let bg_model = target_model.to_string();
+    let prior_count = memory.total_prior_messages;
+
+    tokio::spawn(async move {
+        if let Ok(s_uuid) = Uuid::parse_str(&bg_sid) {
+            // 1. Auto-title if this is the first turn
+            if prior_count <= 1 {
+                let should_title = sqlx::query_scalar::<_, bool>(
+                    "SELECT title_source = 'auto' AND (title = 'New Conversation' OR title IS NULL) FROM chat_sessions WHERE id = $1"
+                )
+                .bind(s_uuid)
+                .fetch_optional(&bg_pool)
+                .await
+                .unwrap_or_default()
+                .unwrap_or(false);
+
+                if should_title {
+                    let prompt = format!(
+                        "Generate a concise, descriptive title (3-5 words maximum) for a chat conversation that begins with this user question: \"{}\". Return ONLY the title text with no quotation marks, labels, or formatting.",
+                        bg_q
+                    );
+                    if let Ok(title_res) = call_groq_synthesize(
+                        &bg_api_key,
+                        &bg_model,
+                        "You generate ultra-concise conversation titles.",
+                        &prompt,
+                    ).await {
+                        let clean_title = title_res.trim().trim_matches('"').trim();
+                        if !clean_title.is_empty() && clean_title.len() < 60 {
+                            let _ = sqlx::query(
+                                "UPDATE chat_sessions SET title = $1, title_source = 'auto', updated_at = NOW() WHERE id = $2"
+                            )
+                            .bind(clean_title)
+                            .bind(s_uuid)
+                            .execute(&bg_pool)
+                            .await;
+                        }
+                    }
+                }
+            }
+
+            // 2. Rolling summary update if conversation exceeds 6 messages
+            if prior_count >= 6 {
+                if let Ok(all_msgs) = sqlx::query_as::<_, (String, String)>(
+                    "SELECT role, content FROM chat_messages WHERE chat_session_id = $1 OR session_id = $2 ORDER BY created_at ASC"
+                )
+                .bind(&bg_sid)
+                .bind(s_uuid)
+                .fetch_all(&bg_pool)
+                .await {
+                    if all_msgs.len() > 6 {
+                        let mut transcript = String::new();
+                        for (role, content) in &all_msgs {
+                            let excerpt: String = content.chars().take(250).collect();
+                            transcript.push_str(&format!("{}: {}\n", role, excerpt));
+                        }
+                        let prompt = format!(
+                            "Summarize the ongoing conversation below in 2 concise paragraphs, capturing key user intents, decisions, action items, and referenced meetings:\n\n{}",
+                            transcript
+                        );
+                        if let Ok(sum_res) = call_groq_synthesize(
+                            &bg_api_key,
+                            &bg_model,
+                            "You are a conversation summarizer. Provide concise, high-density factual summaries.",
+                            &prompt,
+                        ).await {
+                            let clean_sum = sum_res.trim();
+                            if !clean_sum.is_empty() {
+                                let _ = sqlx::query(
+                                    "UPDATE chat_sessions SET summary = $1, updated_at = NOW() WHERE id = $2"
+                                )
+                                .bind(clean_sum)
+                                .bind(s_uuid)
+                                .execute(&bg_pool)
+                                .await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     let _ = on_event.send(ChatStreamEvent::Done {
         answer: cleaned_answer,
         citations,
@@ -881,10 +1185,22 @@ pub async fn api_chat_send_message(
         }
     };
 
-    // Step 2: Retrieve Chunks & Insights
+    // Step 2: Load Multi-Turn Conversation Memory & Target Model
+    let target_model = model_config
+        .as_ref()
+        .map(|c| c.model.trim())
+        .filter(|m| !m.is_empty() && !m.contains("whisper") && !m.contains("llama"))
+        .unwrap_or("openai/gpt-oss-120b");
+
+    let memory = load_conversation_memory(&pool, &chat_session_id, current_user).await;
+
+    // Step 3: Rewrite follow-up query into standalone search query if needed
+    let search_query = rewrite_query_for_search(&api_key, target_model, &q, &memory).await;
+
+    // Step 4: Retrieve Chunks & Insights
     let project_scope = resolve_session_project_scope(&pool, &chat_session_id, active_pid).await;
-    let keywords = extract_search_keywords(&q);
-    let query_vector_str = fetch_query_embedding_local(&q).await;
+    let keywords = extract_search_keywords(&search_query);
+    let query_vector_str = fetch_query_embedding_local(&search_query).await;
 
     let chunks = search_knowledge_chunks(
         &pool,
@@ -910,8 +1226,26 @@ pub async fn api_chat_send_message(
         });
     }
 
-    // Step 3: Construct Synthesis Context
+    // Step 5: Construct Synthesis Context with Multi-Turn Memory & Chunks
     let mut context_builder = String::new();
+
+    if let Some(intent) = &memory.anchored_intent {
+        context_builder.push_str(&format!("=== CONVERSATION TOPIC / ORIGINAL INTENT ===\n{}\n\n", intent));
+    }
+
+    if let Some(sum) = &memory.rolling_summary {
+        context_builder.push_str(&format!("=== PRIOR CONVERSATION SUMMARY ===\n{}\n\n", sum));
+    }
+
+    if !memory.recent_turns.is_empty() {
+        context_builder.push_str("=== RECENT CONVERSATION TURNS ===\n");
+        for (role, text) in &memory.recent_turns {
+            let label = if role == "user" { "User" } else { "Assistant" };
+            context_builder.push_str(&format!("{}: {}\n", label, text.trim()));
+        }
+        context_builder.push_str("\n(Note: Prior assistant responses are for conversation continuity. Ground any factual claims about meetings exclusively in the RELEVANT MEETING KNOWLEDGE chunks below).\n\n");
+    }
+
     if !chunks.is_empty() {
         context_builder.push_str("=== RELEVANT MEETING KNOWLEDGE & TRANSCRIPT CHUNKS ===\n");
         for (idx, c) in chunks.iter().enumerate() {

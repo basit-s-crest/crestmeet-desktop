@@ -35,6 +35,9 @@ export interface VirtualizedTranscriptViewProps {
     totalCount?: number;
     loadedCount?: number;
     onLoadMore?: () => void;
+
+    /** Jump to initial citation timestamp */
+    initialTimestamp?: number;
 }
 
 // Threshold for enabling virtualization (below this, use simple rendering)
@@ -72,6 +75,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence,
     isStreaming,
     showConfidence,
+    isHighlighted = false,
 }: {
     id: string;
     timestamp: number;
@@ -79,11 +83,25 @@ const TranscriptSegment = memo(function TranscriptSegment({
     confidence?: number;
     isStreaming: boolean;
     showConfidence: boolean;
+    isHighlighted?: boolean;
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
     return (
-        <div id={`segment-${id}`} className="mb-3">
+        <div
+            id={`segment-${id}`}
+            className={`mb-3 transition-all duration-500 rounded-xl p-2 ${
+                isHighlighted
+                    ? 'ring-2 ring-indigo-500 bg-indigo-50/90 dark:bg-indigo-950/60 shadow-md'
+                    : ''
+            }`}
+        >
+            {isHighlighted && (
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-ping" />
+                    <span>Cited Excerpt • {formatRecordingTime(timestamp)}</span>
+                </div>
+            )}
             <div className="flex items-start gap-2">
                 <Tooltip>
                     <TooltipTrigger asChild>
@@ -137,11 +155,16 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     totalCount = 0,
     loadedCount = 0,
     onLoadMore,
+    initialTimestamp,
 }) => {
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
     // Ref for infinite scroll trigger element
     const loadMoreTriggerRef = useRef<HTMLDivElement>(null);
+
+    // Deep-link citation highlight tracking
+    const [highlightedSegmentId, setHighlightedSegmentId] = useState<string | null>(null);
+    const hasScrolledInitialRef = useRef(false);
 
     // STT channel status tracking
     const [sttStatus, setSttStatus] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
@@ -196,6 +219,58 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         isRecording,
         enableStreaming
     );
+
+    // Handle deep-link initial timestamp navigation & highlighting
+    useEffect(() => {
+        if (typeof initialTimestamp !== 'number' || segments.length === 0 || hasScrolledInitialRef.current) {
+            return;
+        }
+
+        hasScrolledInitialRef.current = true;
+
+        // Find exact or closest segment
+        let targetIndex = segments.findIndex((seg) => {
+            const start = seg.timestamp ?? 0;
+            const end = seg.endTime ?? (start + 15);
+            return initialTimestamp >= start && initialTimestamp <= end;
+        });
+
+        if (targetIndex === -1) {
+            targetIndex = segments.reduce((bestIdx, seg, idx) => {
+                const diff = Math.abs((seg.timestamp ?? 0) - initialTimestamp);
+                const bestDiff = Math.abs((segments[bestIdx].timestamp ?? 0) - initialTimestamp);
+                return diff < bestDiff ? idx : bestIdx;
+            }, 0);
+        }
+
+        const matchedSegment = segments[targetIndex];
+        if (matchedSegment) {
+            setHighlightedSegmentId(matchedSegment.id);
+
+            const timer = setTimeout(() => {
+                if (segments.length >= VIRTUALIZATION_THRESHOLD && virtualizer) {
+                    virtualizer.scrollToIndex(targetIndex, { align: 'center', behavior: 'smooth' });
+                } else {
+                    const el = document.getElementById(`segment-${matchedSegment.id}`);
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: initialTimestamp } }));
+                }
+            }, 200);
+
+            // Clear pulse highlight after 4 seconds
+            const clearTimer = setTimeout(() => {
+                setHighlightedSegmentId(null);
+            }, 4500);
+
+            return () => {
+                clearTimeout(timer);
+                clearTimeout(clearTimer);
+            };
+        }
+    }, [initialTimestamp, segments, virtualizer]);
 
     // Infinite scroll: IntersectionObserver to trigger loading more
     useEffect(() => {
@@ -339,6 +414,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        isHighlighted={highlightedSegmentId === segment.id}
                                     />
                                 </div>
                             );
@@ -395,6 +471,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         confidence={segment.confidence}
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
+                                        isHighlighted={highlightedSegmentId === segment.id}
                                     />
                                 </motion.div>
                             );

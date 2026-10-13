@@ -12,7 +12,7 @@
 |---|---|:---:|:---:|
 | **Phase 1** | **Projects & Membership** (Tenant boundary, roles, project switcher, UI context) | ✅ Completed | 100% |
 | **Phase 2** | **Knowledge Base Pipeline** (Chunking, enrichment, embeddings, insights, indexing jobs) | 🔄 Near Complete | 80% |
-| **Phase 3** | **Chatbot v2 & Chat Product** (`chat_sessions`, history sidebar, streaming, citations, memory) | 🔄 Near Complete | 85% |
+| **Phase 3** | **Chatbot v2 & Chat Product** (`chat_sessions`, history sidebar, streaming, citations, memory) | ✅ Completed | 100% |
 | **Phase 4** | **Sharing & Export** (Immutable snapshots, members-only/public links, Markdown/PDF export) | ⏳ Queued | 0% |
 | **Phase 5** | **Public Links, Quality & Agent Mode** (Read-only tools, web viewer, reranking) | ⏳ Queued | 0% |
 | **Phase 6** | **Advanced Capabilities** (Branching, org tier, offline local-LLM) | ⏳ Queued | 0% |
@@ -67,18 +67,19 @@
 - [x] **P3-4: Server-Verified Citations (`[S#]`)**
   - Validate model references against retrieved chunks
   - Citations rendered with clickable source chips and date/time references
-  - [ ] **P3-4b: Deep-Link Citation Navigation**
-    - Click citation chip → navigate to meeting detail view
-    - Jump directly to timestamp and auto-highlight the cited transcript excerpt
-- [ ] **P3-5: Conversation Memory (Rolling Summary)**
-  - Anchor first user query (main intent)
-  - Last 6 turns (3 user + 3 assistant) passed verbatim in context (~2k tokens)
-  - Background Groq call updates `chat_sessions.summary` on turn > 6
-  - Rolling summary injected into RAG synthesis prompt for older turns
-- [x] **P3-6: History Panel UI (Left Sidebar)**
+  - [x] **P3-4b: Deep-Link Citation Navigation**
+    - Click citation chip → navigate to meeting detail view (`/meeting-details?id=...&t=...`)
+    - Jump directly to timestamp and auto-highlight the cited transcript excerpt with glowing pulse indicator
+    - Seek synchronized screen recording / audio playback directly to cited moment
+  - [x] **P3-5: Conversation Memory (Rolling Summary & History-Aware Rewrite)**
+    - Anchor first user query as overarching topic / intent
+    - Last 6 turns (3 user + 3 assistant) passed verbatim in context with collision-safe citation sanitization
+    - History-aware query rewriter transforms conversational follow-ups (e.g. "What about the budget?", "Who said that?") into standalone search queries for pgvector + FTS
+    - Background Groq calls automatically maintain `chat_sessions.title` (auto-titling) and `chat_sessions.summary` (rolling summary for turns > 6)
+  - [x] **P3-6: History Panel UI (Left Sidebar)**
   - Grouped by Pinned / Today / Yesterday / Previous 7 Days / Previous 30 Days / Older
   - Integrated `ChatHistorySidebar` with rename inline, pin/unpin, archive, delete, and search filtering
-- [x] **P3-7: Turn Controls & Clipboard Actions**
+  - [x] **P3-7: Turn Controls & Clipboard Actions**
   - Copy response with formatted Markdown citations, clear history, suggested prompt starters
   - Interactive project scope switcher with full multi-tenant isolation
 
@@ -130,4 +131,6 @@ If Python-based tooling or microservices are utilized (e.g. for golden-set bench
   - Wired background post-recording indexing trigger into `api_save_transcript` in `api/api.rs`.
   - Implemented real-time token streaming with Tauri 2.0 `Channel<ChatStreamEvent>` and Groq SSE parser in `src-tauri/src/chat/mod.rs` (`api_chat_send_message_stream`).
   - Updated frontend chat canvas with word-by-word streaming rendering and inline pulsing status indicators.
-  - **Queued for immediate implementation:** Deep-Link Citation Navigation (`P3-4b`) & Multi-Turn Conversation Memory (`P3-5`).
+  - **Completed P3-4b (Deep-Link Citation Navigation):** Clickable source chips with `[S#]` tags, timestamps, speaker attribution, and query params (`?id=...&t=...`). Added auto-scroll to exact excerpt with animated pulsing ring and video player timestamp seeking in [VirtualizedTranscriptView.tsx](file:///d:/crestmeet-desktop/frontend/src/components/VirtualizedTranscriptView.tsx).
+  - **Completed P3-5 (Multi-Turn Conversation Memory):** Added `load_conversation_memory`, intent anchoring, 6-turn recent dialogue window with collision-safe citation sanitization, history-aware follow-up query rewriting via Groq, background auto-titling, and rolling summary compression in [chat/mod.rs](file:///d:/crestmeet-desktop/frontend/src-tauri/src/chat/mod.rs).
+  - **Next Priority:** Phase 4 (Sharing & Export via `chat_shares` immutable snapshots and Markdown/PDF export) and P2-5 (Summary Chunks & Project Briefs).

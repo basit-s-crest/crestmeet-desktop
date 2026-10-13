@@ -43,6 +43,9 @@ interface TranscriptPanelProps {
 
   // Resizable width in pixels
   width?: number;
+
+  // Jump to citation timestamp
+  initialTimestamp?: number;
 }
 
 export function TranscriptPanel({
@@ -71,6 +74,7 @@ export function TranscriptPanel({
   videoUrl,
   uploadStatus,
   width,
+  initialTimestamp,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
@@ -196,6 +200,7 @@ export function TranscriptPanel({
           totalCount={totalCount}
           loadedCount={loadedCount}
           onLoadMore={onLoadMore}
+          initialTimestamp={initialTimestamp}
         />
       </div>
 

@@ -408,11 +408,15 @@ function MeetingDetailsContent() {
     );
   }
 
+  const targetTimeStr = searchParams.get('t');
+  const initialTimestamp = targetTimeStr ? parseFloat(targetTimeStr) : undefined;
+
   return <PageContent
     meeting={meetingDetails}
     summaryData={meetingSummary}
     shouldAutoGenerate={shouldAutoGenerate}
     onAutoGenerateComplete={() => setShouldAutoGenerate(false)}
+    initialTimestamp={initialTimestamp}
     onMeetingUpdated={async () => {
       // Refetch meeting details to get updated title from backend
       await fetchMeetingDetails();

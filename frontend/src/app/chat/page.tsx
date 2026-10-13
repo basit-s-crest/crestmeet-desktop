@@ -46,10 +46,23 @@ import {
 } from '@/components/Chat/ChatHistorySidebar';
 
 interface MeetingCitation {
+  label?: string;
   meetingId: string;
   meetingTitle: string;
   date: string;
   snippet?: string;
+  startSeconds?: number;
+  endSeconds?: number;
+  speaker?: string;
+  projectName?: string;
+  chunkId?: string;
+}
+
+function formatCitationTime(seconds?: number): string | null {
+  if (typeof seconds !== 'number') return null;
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
 interface RecentMeetingInfo {
@@ -422,12 +435,13 @@ export default function ChatPage() {
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
-  const navigateToMeeting = (meetingId: string) => {
+  const navigateToMeeting = (meetingId: string, startSeconds?: number) => {
     const targetMeeting = meetings.find((m) => m.id === meetingId);
     if (targetMeeting) {
       setCurrentMeeting(targetMeeting);
     }
-    router.push(`/meeting-details?id=${meetingId}`);
+    const timeParam = typeof startSeconds === 'number' ? `&t=${Math.floor(startSeconds)}` : '';
+    router.push(`/meeting-details?id=${meetingId}${timeParam}`);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -653,23 +667,43 @@ export default function ChatPage() {
 
                           {/* Citations Row */}
                           {message.citations && message.citations.length > 0 && (
-                            <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-zinc-800 space-y-1.5">
+                            <div className="mt-3 pt-2.5 border-t border-slate-100 dark:border-zinc-800 space-y-2">
                               <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
-                                <ExternalLink className="w-3 h-3 text-indigo-500" />
-                                <span>Sources ({message.citations.length})</span>
+                                <ExternalLink className="w-3.5 h-3.5 text-indigo-500" />
+                                <span>Sources & Citations ({message.citations.length})</span>
                               </div>
-                              <div className="flex flex-wrap gap-1.5">
-                                {message.citations.map((cite, cIdx) => (
-                                  <button
-                                    key={cIdx}
-                                    onClick={() => navigateToMeeting(cite.meetingId)}
-                                    className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[11px] font-medium bg-slate-50 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-indigo-50 hover:text-indigo-600 border border-slate-200 dark:border-zinc-700 transition-colors"
-                                  >
-                                    <Calendar className="w-3 h-3 text-slate-400" />
-                                    <span>{cite.meetingTitle}</span>
-                                    <span className="text-[10px] text-slate-400">({cite.date})</span>
-                                  </button>
-                                ))}
+                              <div className="flex flex-wrap gap-2">
+                                {message.citations.map((cite, cIdx) => {
+                                  const timeFormatted = formatCitationTime(cite.startSeconds);
+                                  return (
+                                    <button
+                                      key={cIdx}
+                                      onClick={() => navigateToMeeting(cite.meetingId, cite.startSeconds)}
+                                      title={cite.snippet ? `"${cite.snippet}"` : `Jump to ${cite.meetingTitle}`}
+                                      className="group/cite flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-50 dark:bg-zinc-800/90 text-slate-700 dark:text-zinc-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200 dark:border-zinc-700 hover:border-indigo-200 dark:hover:border-indigo-800 transition-all cursor-pointer shadow-2xs"
+                                    >
+                                      {cite.label && (
+                                        <span className="px-1 py-0.2 rounded bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-mono text-[10px] font-bold">
+                                          [{cite.label}]
+                                        </span>
+                                      )}
+                                      <Calendar className="w-3 h-3 text-slate-400 group-hover/cite:text-indigo-500 transition-colors" />
+                                      <span className="font-semibold text-slate-800 dark:text-zinc-200 group-hover/cite:text-indigo-600 dark:group-hover/cite:text-indigo-400">
+                                        {cite.meetingTitle}
+                                      </span>
+                                      {timeFormatted && (
+                                        <span className="flex items-center gap-0.5 px-1 py-0.2 rounded bg-slate-200/80 dark:bg-zinc-700 text-slate-600 dark:text-zinc-300 font-mono text-[10px]">
+                                          <Clock className="w-2.5 h-2.5 text-slate-400" />
+                                          {timeFormatted}
+                                        </span>
+                                      )}
+                                      {cite.speaker && (
+                                        <span className="text-[10px] text-slate-400">({cite.speaker})</span>
+                                      )}
+                                      <ArrowUpRight className="w-3 h-3 text-slate-400 opacity-60 group-hover/cite:opacity-100 group-hover/cite:translate-x-0.5 group-hover/cite:-translate-y-0.5 transition-all ml-0.5" />
+                                    </button>
+                                  );
+                                })}
                               </div>
                             </div>
                           )}

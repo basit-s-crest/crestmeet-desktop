@@ -27,6 +27,7 @@ export default function PageContent({
   summaryData,
   shouldAutoGenerate = false,
   onAutoGenerateComplete,
+  initialTimestamp,
   onMeetingUpdated,
   onRefetchTranscripts,
   // Pagination props for efficient transcript loading
@@ -41,6 +42,7 @@ export default function PageContent({
   summaryData: Summary | null;
   shouldAutoGenerate?: boolean;
   onAutoGenerateComplete?: () => void;
+  initialTimestamp?: number;
   onMeetingUpdated?: () => Promise<void>;
   onRefetchTranscripts?: () => Promise<void>;
   // Pagination props
@@ -324,6 +326,7 @@ export default function PageContent({
           videoUrl={(meeting as any).video_url}
           uploadStatus={(meeting as any).upload_status}
           width={transcriptWidth}
+          initialTimestamp={initialTimestamp}
         />
 
         {/* Draggable Divider Handle - slim 1px line with comfortable hit area */}
