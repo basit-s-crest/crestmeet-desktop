@@ -811,8 +811,15 @@ pub fn run() {
             summary::reschedule_extractor::api_extract_reschedule_info,
             // Cross-Meeting AI Chatbot commands
             chat::api_chat_send_message,
+            chat::api_chat_send_message_stream,
             chat::api_chat_get_history,
             chat::api_chat_clear_history,
+            chat::api_chat_list_sessions,
+            chat::api_chat_create_session,
+            chat::api_chat_rename_session,
+            chat::api_chat_pin_session,
+            chat::api_chat_archive_session,
+            chat::api_chat_delete_session,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

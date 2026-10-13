@@ -1242,6 +1242,32 @@ pub async fn api_save_transcript<R: Runtime>(
                 meeting_id,
                 resolved_project_id
             );
+
+            // Auto-trigger RAG knowledge base indexing in background
+            let mid_clone = meeting_id.clone();
+            tokio::spawn(async move {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build();
+                if let Ok(c) = client {
+                    let url = format!("http://127.0.0.1:8123/index-meeting/{}", mid_clone);
+                    if let Ok(res) = c.post(&url).send().await {
+                        if res.status().is_success() {
+                            tracing::info!("✅ Auto-indexed meeting {} via RAG HTTP service", mid_clone);
+                            return;
+                        }
+                    }
+                }
+
+                let mut cmd = std::process::Command::new("uv");
+                cmd.args(["run", "python", "-m", "crestmeet_rag.indexing", &mid_clone]);
+                let rag_path = std::path::Path::new("services/rag_service");
+                if rag_path.exists() {
+                    cmd.current_dir(rag_path);
+                }
+                let _ = cmd.output();
+            });
+
             Ok(serde_json::json!({
                 "status": "success",
                 "message": "Transcript saved successfully",
