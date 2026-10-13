@@ -187,7 +187,7 @@ class MeetingIndexer:
                         ),
                     )
 
-                # 6. Extract insights from summary_processes if available
+                # 6. Extract insights and embed summary chunks from summary_processes if available
                 cur.execute(
                     """
                     SELECT result FROM summary_processes WHERE meeting_id = %s AND status = 'completed'
@@ -198,7 +198,36 @@ class MeetingIndexer:
                 if summary_row and summary_row[0]:
                     try:
                         summary_json = json.loads(summary_row[0]) if isinstance(summary_row[0], str) else summary_row[0]
-                        # Action items
+
+                        # 6a. Embed Summary Chunk (source_type = 'summary')
+                        overview = summary_json.get("overview") or summary_json.get("summary") or summary_json.get("notes") or ""
+                        if isinstance(overview, dict):
+                            overview = json.dumps(overview)
+                        if isinstance(overview, str) and len(overview.strip()) > 30:
+                            summary_header = f"Project: {project_name} | Meeting: {m_title} | Date: {date_str} | Source: AI Executive Summary"
+                            summary_hash = hashlib.sha256(overview.encode("utf-8")).hexdigest()
+                            _, _, summary_vectors = self.embedder.embed_texts([f"{summary_header}\n{overview.strip()}"])
+                            s_vec_str = "[" + ",".join(f"{x:.6f}" for x in summary_vectors[0]) + "]"
+                            cur.execute(
+                                """
+                                INSERT INTO knowledge_chunks (
+                                    project_id, meeting_id, source_type, chunk_index,
+                                    content, context_header, token_count, content_hash, embedding, embedding_model
+                                ) VALUES (
+                                    %s, %s, 'summary', 0,
+                                    %s, %s, %s, %s, %s::vector, %s
+                                )
+                                ON CONFLICT (meeting_id, source_type, chunk_index) DO UPDATE SET
+                                    content = EXCLUDED.content,
+                                    context_header = EXCLUDED.context_header,
+                                    content_hash = EXCLUDED.content_hash,
+                                    embedding = EXCLUDED.embedding,
+                                    embedding_model = EXCLUDED.embedding_model
+                                """,
+                                (project_id, m_id, overview.strip(), summary_header, self.chunker.count_tokens(overview), summary_hash, s_vec_str, model_tag),
+                            )
+
+                        # 6b. Action items & key decisions
                         action_items = summary_json.get("action_items") or []
                         for item in action_items:
                             text = item if isinstance(item, str) else item.get("description", str(item))
@@ -210,7 +239,6 @@ class MeetingIndexer:
                                 """,
                                 (project_id, m_id, text, owner),
                             )
-                        # Key decisions
                         decisions = summary_json.get("decisions") or []
                         for dec in decisions:
                             text = dec if isinstance(dec, str) else str(dec)
@@ -223,6 +251,57 @@ class MeetingIndexer:
                             )
                     except Exception as e:
                         logger.warning(f"Could not parse summary_processes JSON for {m_id}: {e}")
+
+                # 6c. Auto-maintain project_briefs (~300 tokens)
+                try:
+                    cur.execute(
+                        """
+                        SELECT m.id, m.title, m.created_at, substring(kc.content from 1 for 220)
+                        FROM knowledge_chunks kc
+                        JOIN meetings m ON m.id = kc.meeting_id
+                        WHERE kc.project_id = %s AND kc.source_type = 'summary'
+                        ORDER BY m.created_at DESC
+                        LIMIT 3
+                        """,
+                        (project_id,),
+                    )
+                    recent_summaries = cur.fetchall()
+                    if recent_summaries:
+                        brief_parts = [f"Project Overview: {project_name}"]
+                        src_ids = []
+                        for sm_id, sm_title, sm_date, sm_content in recent_summaries:
+                            src_ids.append(sm_id)
+                            brief_parts.append(f"- Meeting '{sm_title}' ({str(sm_date)[:10]}): {sm_content.strip()}")
+
+                        cur.execute(
+                            """
+                            SELECT content, owner_name FROM meeting_insights
+                            WHERE project_id = %s AND type = 'action_item' AND status = 'open'
+                            LIMIT 5
+                            """,
+                            (project_id,),
+                        )
+                        open_items = cur.fetchall()
+                        if open_items:
+                            brief_parts.append("Key Open Deliverables:")
+                            for item_text, owner in open_items:
+                                owner_str = f" ({owner})" if owner else ""
+                                brief_parts.append(f"  * {item_text}{owner_str}")
+
+                        project_brief_text = "\n".join(brief_parts)
+                        cur.execute(
+                            """
+                            INSERT INTO project_briefs (project_id, brief, source_meeting_ids, updated_at)
+                            VALUES (%s, %s, %s, NOW())
+                            ON CONFLICT (project_id) DO UPDATE SET
+                                brief = EXCLUDED.brief,
+                                source_meeting_ids = EXCLUDED.source_meeting_ids,
+                                updated_at = NOW()
+                            """,
+                            (project_id, project_brief_text, src_ids),
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not update project_briefs for project {project_id}: {e}")
 
                 # 7. Commit and mark indexing job as 'succeeded'
                 cur.execute(

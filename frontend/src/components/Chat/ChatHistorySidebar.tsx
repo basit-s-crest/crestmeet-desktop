@@ -142,13 +142,13 @@ export function ChatHistorySidebar({
 
       {/* Search Bar */}
       <div className="px-3 pt-3 pb-1">
-        <div className="relative">
-          <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400 dark:text-zinc-500" />
+        <div className="relative flex items-center">
+          <Search className="w-3.5 h-3.5 absolute left-3 text-slate-400 dark:text-zinc-500 pointer-events-none" />
           <Input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search conversations..."
-            className="pl-8.5 h-8 text-xs bg-slate-50/70 dark:bg-zinc-800/50 border-slate-200/80 dark:border-zinc-700/70 rounded-xl focus-visible:ring-2 focus-visible:ring-indigo-500/20 focus-visible:border-indigo-500 text-slate-800 dark:text-zinc-200 placeholder:text-slate-400 dark:placeholder:text-zinc-500 shadow-none transition-all"
+            className="pl-9 pr-3 h-8 text-xs bg-slate-50/70 dark:bg-zinc-800/50 border-slate-200/80 dark:border-zinc-700/70 rounded-xl focus-visible:ring-2 focus-visible:ring-indigo-500/20 focus-visible:border-indigo-500 text-slate-800 dark:text-zinc-200 placeholder:text-slate-400 dark:placeholder:text-zinc-500 shadow-none transition-all"
           />
         </div>
       </div>

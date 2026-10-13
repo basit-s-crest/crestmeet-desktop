@@ -3,6 +3,9 @@
 pub mod sessions;
 pub use sessions::*;
 
+pub mod sharing;
+pub use sharing::*;
+
 use chrono::Utc;
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -931,7 +934,8 @@ Rules:
 1. When stating facts or conclusions from specific meetings, cite each source inline using [S#] or [[meeting_id: Meeting Title]]. For example: "The deployment was scheduled for Friday [S1] and pricing was capped at 15% [S2]."
 2. If citing decisions or action items, state the owner and due date if available.
 3. If the provided context does NOT contain enough information to answer the question, state clearly that you could not find this in their recorded meetings.
-4. Keep answers clear, professional, concise, and structured with markdown bullet points."#;
+4. Keep answers clear, professional, concise, and structured with markdown bullet points.
+5. If providing markdown tables, avoid raw HTML tags like <br>. Separate distinct items on separate rows or format them cleanly with bullet points."#;
 
     let user_prompt = format!(
         "Context Information:\n{}\n\nUser Question: {}",
@@ -1304,7 +1308,8 @@ Rules:
 1. When stating facts or conclusions from specific meetings, cite each source inline using [S#] or [[meeting_id: Meeting Title]]. For example: "The deployment was scheduled for Friday [S1] and pricing was capped at 15% [S2]."
 2. If citing decisions or action items, state the owner and due date if available.
 3. If the provided context does NOT contain enough information to answer the question, state clearly that you could not find this in their recorded meetings.
-4. Keep answers clear, professional, concise, and structured with markdown bullet points."#;
+4. Keep answers clear, professional, concise, and structured with markdown bullet points.
+5. If providing markdown tables, avoid raw HTML tags like <br>. Separate distinct items on separate rows or format them cleanly with bullet points."#;
 
     let user_prompt = format!(
         "Context Information:\n{}\n\nUser Question: {}",

@@ -2,7 +2,7 @@
 
 > **Tracking progress against:** [CHATBOT_DEVELOPMENT_README.md](file:///c:/Projects-Crest/meetily/CHATBOT_DEVELOPMENT_README.md)  
 > **Last Updated:** 2026-10-13  
-> **Current Status:** Phase 2 (Knowledge Base Pipeline) & Phase 3 (Database Schema & Chat Sessions) in active development
+> **Current Status:** Phase 1, Phase 2, Phase 3, and Phase 4 are 100% Complete!
 
 ---
 
@@ -11,10 +11,10 @@
 | Phase | Description | Status | Progress |
 |---|---|:---:|:---:|
 | **Phase 1** | **Projects & Membership** (Tenant boundary, roles, project switcher, UI context) | ✅ Completed | 100% |
-| **Phase 2** | **Knowledge Base Pipeline** (Chunking, enrichment, embeddings, insights, indexing jobs) | 🔄 Near Complete | 80% |
+| **Phase 2** | **Knowledge Base Pipeline** (Chunking, enrichment, embeddings, insights, indexing jobs) | ✅ Completed | 100% |
 | **Phase 3** | **Chatbot v2 & Chat Product** (`chat_sessions`, history sidebar, streaming, citations, memory) | ✅ Completed | 100% |
-| **Phase 4** | **Sharing & Export** (Immutable snapshots, members-only/public links, Markdown/PDF export) | ⏳ Queued | 0% |
-| **Phase 5** | **Public Links, Quality & Agent Mode** (Read-only tools, web viewer, reranking) | ⏳ Queued | 0% |
+| **Phase 4** | **Sharing & Export** (Immutable snapshots, members-only/public links, Markdown/PDF export) | ✅ Completed | 100% |
+| **Phase 5** | **Public Links, Quality & Agent Mode** (Read-only tools, web viewer, reranking) | ⏳ Next | 0% |
 | **Phase 6** | **Advanced Capabilities** (Branching, org tier, offline local-LLM) | ⏳ Queued | 0% |
 
 ---
@@ -43,9 +43,10 @@
 - [x] **P2-4: Contextual Enrichment & Insight Extractor**
   - Context header: `{Project | Meeting | Date | Speakers}`
   - Extract `meeting_insights` (decisions, action items, risks, deadlines)
-- [ ] **P2-5: Summary Chunks & Project Briefs**
-  - Chunk and embed AI summaries (`source_type = 'summary'`)
-  - Auto-maintain `project_briefs` (~300 tokens)
+- [x] **P2-5: Summary Chunks & Project Briefs**
+  - Chunk and embed AI summaries (`source_type = 'summary'`) into `knowledge_chunks`
+  - Auto-generate and maintain `project_briefs` (~300 tokens aggregating key decisions and open tasks)
+  - Implemented in `services/rag_service/src/crestmeet_rag/indexing.py`
 - [x] **P2-6: Resumable Indexing Pipeline (`indexing_jobs`)**
   - Track stages in `indexing_jobs` (`chunk`, `embed`, `insights`, `done`)
   - Post-recording background indexing hook wired to `api_save_transcript`
@@ -86,10 +87,24 @@
 ---
 
 ### Phase 4: Sharing & Export
-- [ ] **P4-1: `chat_shares` & `chat_share_messages` Immutable Snapshots**
-- [ ] **P4-2: Members-Only Deep-Link Sharing & Forking ("Continue in my chats")**
-- [ ] **P4-3: Share Dialog UI & Token Revocation Controls**
-- [ ] **P4-4: Local Export to Markdown & PDF**
+- [x] **P4-1: `chat_shares` & `chat_share_messages` Immutable Snapshots**
+  - Secure token generation (`csh_...`) with PostgreSQL SHA-256 hashing via `encode(digest($token, 'sha256'), 'hex')`
+  - Deep snapshot copying of messages and citations into `chat_share_messages`
+  - Source privacy toggle (`include_sources`) stripping citations when disabled
+  - Implemented in `src-tauri/src/chat/sharing.rs` (`ChatShareRepository::create_share`)
+- [x] **P4-2: Members-Only Deep-Link Sharing & Forking ("Continue in my chats")**
+  - `api_chat_get_shared` resolving snapshots by token hash, validating expiry and revocation, incrementing view counts
+  - `api_chat_fork_shared` copying frozen snapshot messages into a new personal chat session for ongoing dialogue
+  - `api_chat_revoke_share` and `api_chat_list_shares` management commands
+  - Exposed via Tauri IPC and registered in `src-tauri/src/lib.rs`
+- [x] **P4-3: Share Dialog UI & Token Revocation Controls**
+  - Built `frontend/src/components/Chat/ShareChatDialog.tsx`
+  - Audience toggle (Project Members vs Anyone with Link), Citations inclusion switch, and Expiration selector (7d / 30d / 90d / Never)
+  - Active links listing with view counters, remaining expiry, 1-click clipboard copy, and revocation button
+- [x] **P4-4: Local Export to Markdown & PDF**
+  - Implemented in `frontend/src/app/chat/page.tsx`:
+  - **Export as Markdown (.md):** Generates structured markdown with session metadata, query responses, and formatted citation footnotes, auto-downloaded via browser blob.
+  - **Export as PDF:** Clean `@media print` styles hiding sidebars and composers, producing professional printable PDFs via `window.print()`.
 
 ---
 
@@ -105,9 +120,10 @@
 
 ### Python Integration Standard
 If Python-based tooling or microservices are utilized (e.g. for golden-set benchmarking, embedding evaluation, or ML sidecar tasks):
-- Location: Dedicated directory `python/` or `services/ai_engine/`
-- Packaging: Standard `pyproject.toml` or `requirements.txt` with locked versions
-- Isolation: Isolated virtual environment (`.venv`), strict linting, type annotations (`mypy`), and clean entry points.
+- Location: Dedicated directory `services/rag_service/`
+- Packaging: Standard PEP 621 `pyproject.toml` managed with `uv`
+- Inference: FastEmbed ONNX engine pinned to `bge-small-en-v1.5` (384 dimensions)
+- Database: Supabase PostgreSQL with `pgvector` and `pg_trgm` / FTS
 
 ---
 
@@ -133,4 +149,9 @@ If Python-based tooling or microservices are utilized (e.g. for golden-set bench
   - Updated frontend chat canvas with word-by-word streaming rendering and inline pulsing status indicators.
   - **Completed P3-4b (Deep-Link Citation Navigation):** Clickable source chips with `[S#]` tags, timestamps, speaker attribution, and query params (`?id=...&t=...`). Added auto-scroll to exact excerpt with animated pulsing ring and video player timestamp seeking in [VirtualizedTranscriptView.tsx](file:///d:/crestmeet-desktop/frontend/src/components/VirtualizedTranscriptView.tsx).
   - **Completed P3-5 (Multi-Turn Conversation Memory):** Added `load_conversation_memory`, intent anchoring, 6-turn recent dialogue window with collision-safe citation sanitization, history-aware follow-up query rewriting via Groq, background auto-titling, and rolling summary compression in [chat/mod.rs](file:///d:/crestmeet-desktop/frontend/src-tauri/src/chat/mod.rs).
-  - **Next Priority:** Phase 4 (Sharing & Export via `chat_shares` immutable snapshots and Markdown/PDF export) and P2-5 (Summary Chunks & Project Briefs).
+  - **Completed P2-5 (Summary Chunks & Project Briefs):** In `services/rag_service/src/crestmeet_rag/indexing.py`, added automated indexing of meeting AI summaries with `source_type = 'summary'` and generation of 300-token `project_briefs` aggregating decisions & action items.
+  - **Completed Phase 4 (Sharing & Export):**
+    * P4-1: Created `src-tauri/src/chat/sharing.rs` implementing immutable snapshots in `chat_shares` and `chat_share_messages` with Postgres pgcrypto SHA-256 token hashing.
+    * P4-2: Implemented and registered Tauri IPC commands: `api_chat_create_share`, `api_chat_get_shared`, `api_chat_fork_shared` ("Continue in my chats"), `api_chat_revoke_share`, and `api_chat_list_shares`. Verified clean Rust compilation via `cargo check`.
+    * P4-3: Built [ShareChatDialog.tsx](file:///d:/crestmeet-desktop/frontend/src/components/Chat/ShareChatDialog.tsx) with audience switcher (Team vs Link), citations toggle, expiration presets, active shares viewer, and revocation action.
+    * P4-4: Implemented Export dropdown in [page.tsx](file:///d:/crestmeet-desktop/frontend/src/app/chat/page.tsx) with structured Markdown download (.md) and professional `@media print` PDF generation. Verified clean TypeScript build (`tsc --noEmit`).

@@ -820,6 +820,11 @@ pub fn run() {
             chat::api_chat_pin_session,
             chat::api_chat_archive_session,
             chat::api_chat_delete_session,
+            chat::api_chat_create_share,
+            chat::api_chat_get_shared,
+            chat::api_chat_fork_shared,
+            chat::api_chat_revoke_share,
+            chat::api_chat_list_shares,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
