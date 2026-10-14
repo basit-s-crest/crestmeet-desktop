@@ -172,35 +172,35 @@ export function IntegrationSettings() {
       </div>
 
       {/* Google Drive Card */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-        <div className="flex items-start justify-between">
+      <div className="bg-white rounded-xl border border-gray-200/80 p-6 shadow-xs transition-all hover:border-gray-300">
+        <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-              <Cloud className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
+              <Cloud className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2.5">
                 <h3 className="text-base font-semibold text-gray-900">Google Drive</h3>
                 {driveStatus?.is_connected ? (
-                  <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
                     <CheckCircle2 className="w-3 h-3" />
                     Connected
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 bg-gray-100 border border-gray-200 px-2.5 py-0.5 rounded-full">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-500 bg-gray-100 border border-gray-200 px-2 py-0.5 rounded-full">
                     <XCircle className="w-3 h-3" />
                     Not connected
                   </span>
                 )}
               </div>
-              <p className="text-sm text-gray-600 mt-1 max-w-xl leading-relaxed">
+              <p className="text-sm text-gray-500 mt-1 max-w-xl leading-relaxed">
                 Automatically synchronizes meeting recordings to your Google Drive account, allowing
                 team members to stream recordings directly within the app.
               </p>
               {driveStatus?.is_connected && driveStatus.email && (
                 <div className="mt-2.5 text-xs text-gray-500 flex items-center gap-1.5">
                   <span className="font-medium text-gray-700">Account:</span>
-                  <span className="bg-gray-100 text-gray-800 px-2 py-0.5 rounded-md font-mono">
+                  <span className="bg-gray-100 text-gray-800 px-2 py-0.5 rounded-md font-mono text-[11px]">
                     {driveStatus.email}
                   </span>
                 </div>
@@ -215,7 +215,7 @@ export function IntegrationSettings() {
                 size="sm"
                 onClick={handleDisconnectDrive}
                 disabled={loadingDrive}
-                className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+                className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 shadow-2xs transition-all active:scale-95"
               >
                 {loadingDrive ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
@@ -229,7 +229,7 @@ export function IntegrationSettings() {
                 size="sm"
                 onClick={handleConnectDrive}
                 disabled={loadingDrive}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all active:scale-95 text-xs font-medium cursor-pointer"
               >
                 {loadingDrive ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
@@ -244,35 +244,35 @@ export function IntegrationSettings() {
       </div>
 
       {/* Google Calendar Card */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-        <div className="flex items-start justify-between">
+      <div className="bg-white rounded-xl border border-gray-200/80 p-6 shadow-xs transition-all hover:border-gray-300">
+        <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 shrink-0">
-              <Calendar className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 shrink-0">
+              <Calendar className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2.5">
                 <h3 className="text-base font-semibold text-gray-900">Google Calendar</h3>
                 {calendarStatus?.is_connected ? (
-                  <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
                     <CheckCircle2 className="w-3 h-3" />
                     Connected
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 bg-gray-100 border border-gray-200 px-2.5 py-0.5 rounded-full">
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-500 bg-gray-100 border border-gray-200 px-2 py-0.5 rounded-full">
                     <XCircle className="w-3 h-3" />
                     Not connected
                   </span>
                 )}
               </div>
-              <p className="text-sm text-gray-600 mt-1 max-w-xl leading-relaxed">
+              <p className="text-sm text-gray-500 mt-1 max-w-xl leading-relaxed">
                 Connect your Google Calendar to schedule follow-up meetings and sync action items
                 detected by AI summaries directly to your agenda.
               </p>
               {calendarStatus?.is_connected && calendarStatus.email && (
                 <div className="mt-2.5 text-xs text-gray-500 flex items-center gap-1.5">
                   <span className="font-medium text-gray-700">Account:</span>
-                  <span className="bg-gray-100 text-gray-800 px-2 py-0.5 rounded-md font-mono">
+                  <span className="bg-gray-100 text-gray-800 px-2 py-0.5 rounded-md font-mono text-[11px]">
                     {calendarStatus.email}
                   </span>
                 </div>
@@ -287,7 +287,7 @@ export function IntegrationSettings() {
                 size="sm"
                 onClick={handleDisconnectCalendar}
                 disabled={loadingCalendar}
-                className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200"
+                className="text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 shadow-2xs transition-all active:scale-95"
               >
                 {loadingCalendar ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
@@ -301,7 +301,7 @@ export function IntegrationSettings() {
                 size="sm"
                 onClick={handleConnectCalendar}
                 disabled={loadingCalendar}
-                className="bg-amber-600 hover:bg-amber-700 text-white"
+                className="bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition-all active:scale-95 text-xs font-medium cursor-pointer"
               >
                 {loadingCalendar ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />

@@ -7,6 +7,7 @@ import { ModelConfig, ModelSettingsModal } from '@/components/ModelSettingsModal
 import { GroqSummarySettings } from '@/components/GroqSummarySettings';
 import { SummaryLanguageSettings } from '@/components/SummaryLanguageSettings';
 import { Switch } from './ui/switch';
+import { Zap, Sparkles } from 'lucide-react';
 import { useConfig } from '@/contexts/ConfigContext';
 
 interface SummaryModelSettingsProps {
@@ -124,30 +125,63 @@ export function SummaryModelSettings({ refetchTrigger }: SummaryModelSettingsPro
   };
 
   return (
-    <div className='flex flex-col gap-4'>
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Auto Summary</h3>
-            <p className="text-sm text-gray-600">Auto Generating summary after meeting completion(Stopping)</p>
+    <div className='flex flex-col gap-6'>
+      {/* Auto Summary Card */}
+      <div className="bg-white rounded-xl border border-gray-200/80 p-6 shadow-xs transition-all hover:border-gray-300">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 shrink-0">
+              <Zap className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-semibold text-gray-900">Automatic Summary Generation</h3>
+                <span className="text-[11px] font-medium bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full border border-amber-100">
+                  Automation
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 mt-1 leading-relaxed">
+                Automatically generate structured reports, action items, and key decisions as soon as recording stops.
+              </p>
+            </div>
           </div>
-          <Switch checked={isAutoSummary} onCheckedChange={toggleIsAutoSummary} />
+          <Switch
+            checked={isAutoSummary}
+            onCheckedChange={toggleIsAutoSummary}
+            className="cursor-pointer"
+          />
         </div>
       </div>
 
+      {/* Language Settings Card */}
       <SummaryLanguageSettings />
 
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold mb-4">Summary Model Configuration</h3>
-        <p className="text-sm text-gray-600 mb-6">
-          Configure the AI model used for generating meeting summaries.
-        </p>
+      {/* Summary Model Configuration Card */}
+      <div className="bg-white rounded-xl border border-gray-200/80 p-6 shadow-xs transition-all hover:border-gray-300 space-y-5">
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 rounded-xl bg-purple-50 border border-purple-100 flex items-center justify-center text-purple-600 shrink-0">
+            <Sparkles className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-gray-900">Summary Model Engine</h3>
+              <span className="text-[11px] font-medium bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full border border-purple-100">
+                Groq LPU
+              </span>
+            </div>
+            <p className="text-sm text-gray-500 mt-1 leading-relaxed">
+              Configure the large language model used to analyze transcripts, capture action items, and generate notes.
+            </p>
+          </div>
+        </div>
 
-        <GroqSummarySettings
-          modelConfig={modelConfig}
-          setModelConfig={setModelConfig}
-          onSaveSuccess={() => {}}
-        />
+        <div className="pt-2">
+          <GroqSummarySettings
+            modelConfig={modelConfig}
+            setModelConfig={setModelConfig}
+            onSaveSuccess={() => {}}
+          />
+        </div>
       </div>
     </div>
   );

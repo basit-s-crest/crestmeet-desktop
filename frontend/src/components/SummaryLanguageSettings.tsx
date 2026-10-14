@@ -16,15 +16,23 @@ export function SummaryLanguageSettings() {
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm relative">
-      <div className="flex items-center gap-2 mb-2">
-        <Globe size={18} className="text-gray-500" />
-        <h3 className="text-lg font-semibold text-gray-900">Summary Language</h3>
+    <div className="bg-white rounded-xl border border-gray-200/80 p-6 shadow-xs transition-all hover:border-gray-300 relative">
+      <div className="flex items-start gap-4 mb-4">
+        <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
+          <Globe className="w-5 h-5" />
+        </div>
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-semibold text-gray-900">Output Summary Language</h3>
+            <span className="text-[11px] font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full border border-blue-100">
+              Multilingual
+            </span>
+          </div>
+          <p className="text-sm text-gray-500 mt-1 leading-relaxed">
+            Pin a preferred default language for meeting reports. Additional selected languages remain readily available as one-click switches in the summary viewer.
+          </p>
+        </div>
       </div>
-      <p className="text-sm text-gray-600 mb-4">
-        Pin one language as the default for new meetings. Unpinned languages remain as
-        quick-switch options in the summary generator. Auto uses the dominant transcript language.
-      </p>
 
       <div className="flex flex-wrap items-center gap-2">
         {recents.map((code) => {

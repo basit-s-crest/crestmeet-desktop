@@ -169,12 +169,26 @@ export function PreferenceSettings() {
 
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="flex items-center gap-2.5 text-gray-500 text-sm">
+          <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+          <span>Loading system preferences...</span>
+        </div>
+      </div>
+    );
   }
 
   // Show loading if notificationsEnabled hasn't been determined yet
   if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="flex items-center gap-2.5 text-gray-500 text-sm">
+          <div className="w-4 h-4 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+          <span>Loading system preferences...</span>
+        </div>
+      </div>
+    );
   }
 
   // Ensure we have a boolean value for the Switch component
@@ -183,111 +197,111 @@ export function PreferenceSettings() {
   return (
     <div className="space-y-6">
       {/* Notifications Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Notifications</h3>
-            <p className="text-sm text-gray-600">Enable or disable notifications of start and end of meeting</p>
+      <div className="bg-white rounded-xl border border-gray-200/80 p-6 shadow-xs transition-all hover:border-gray-300">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-4">
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-semibold text-gray-900">Meeting Notifications</h3>
+                <span className="text-[11px] font-medium bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-100">
+                  Alerts
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 mt-1 leading-relaxed">
+                Receive non-intrusive system desktop notifications when meeting recordings begin and finish.
+              </p>
+            </div>
           </div>
-          <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
+          <Switch
+            checked={notificationsEnabledValue}
+            onCheckedChange={setNotificationsEnabled}
+            className="cursor-pointer"
+          />
         </div>
       </div>
 
       {/* Data Storage Locations Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Data Storage Locations</h3>
-        <p className="text-sm text-gray-600 mb-6">
-          View and access where CrestMeet stores your data
-        </p>
-
-        <div className="space-y-4">
-          {/* Database Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Database</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.database || 'Loading...'}
-            </div>
-            <button
-              onClick={() => handleOpenFolder('database')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
-          </div> */}
-
-          {/* Models Location */}
-          {/* <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="font-medium mb-2">Whisper Models</div>
-            <div className="text-sm text-gray-600 mb-3 break-all font-mono text-xs">
-              {storageLocations?.models || 'Loading...'}
-            </div>
-            <button
-              onClick={() => handleOpenFolder('models')}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-100 transition-colors"
-            >
-              <FolderOpen className="w-4 h-4" />
-              Open Folder
-            </button>
-          </div> */}
-
-          {/* Recordings Location */}
-          <div className="p-4 border rounded-lg bg-gray-50">
-            <div className="flex items-center justify-between mb-1">
-              <div className="font-medium">Meeting Recordings & Files</div>
-              <span className="text-xs text-blue-700 bg-blue-50 font-medium px-2 py-0.5 rounded-full border border-blue-100">
-                Customizable
+      <div className="bg-white rounded-xl border border-gray-200/80 p-6 shadow-xs transition-all hover:border-gray-300">
+        <div className="flex items-start gap-4 mb-5">
+          <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2 1.5 3 3.5 3h9c2 0 3.5-1 3.5-3V7M4 7c0-2 1.5-3 3.5-3h9c2 0 3.5 1 3.5 3M4 7h16m-5 4h.01M9 11h.01M9 15h6" />
+            </svg>
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-gray-900">Storage & File Locations</h3>
+              <span className="text-[11px] font-medium bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full border border-blue-100">
+                Local Disk
               </span>
             </div>
-            <p className="text-xs text-gray-500 mb-2">
-              Audio recordings and meeting data folders will be saved to this folder.
+            <p className="text-sm text-gray-500 mt-1 leading-relaxed">
+              Configure where recordings, audio segments, and session data folders are persisted on your device.
             </p>
-            <div className="text-sm text-gray-700 mb-3 break-all font-mono text-xs p-2.5 bg-white border border-gray-200 rounded">
-              {recordingsFolder || storageLocations?.recordings || 'Loading...'}
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                onClick={handleSelectFolder}
-                size="sm"
-                className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 shadow-sm"
-              >
-                <FolderEdit className="w-4 h-4" />
-                <span>Change Folder...</span>
-              </Button>
-              <Button
-                onClick={handleResetFolder}
-                variant="outline"
-                size="sm"
-                className="flex items-center gap-1.5"
-                title="Reset to default music recordings directory"
-              >
-                <RotateCcw className="w-3.5 h-3.5 text-gray-500" />
-                <span>Reset to Default</span>
-              </Button>
-              <Button
-                onClick={() => handleOpenFolder('recordings')}
-                variant="outline"
-                size="sm"
-                className="flex items-center gap-1.5"
-              >
-                <FolderOpen className="w-4 h-4 text-gray-500" />
-                <span>Open in Explorer</span>
-              </Button>
-            </div>
           </div>
         </div>
 
-        <div className="mt-4 p-3 bg-blue-50 rounded-md">
-          <p className="text-xs text-blue-800">
-            <strong>Note:</strong> Database and models are stored together in your application data directory for unified management.
+        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="font-semibold text-gray-900 text-sm">Recordings Directory</span>
+            <span className="text-xs text-blue-700 bg-blue-50 font-medium px-2 py-0.5 rounded-full border border-blue-100">
+              Customizable
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mb-3">
+            Audio captures and meeting metadata folders are automatically stored here.
           </p>
+
+          <div className="text-xs text-gray-700 mb-3.5 break-all font-mono p-3 bg-white border border-gray-200 rounded-lg shadow-2xs select-all">
+            {recordingsFolder || storageLocations?.recordings || 'Loading storage location...'}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Button
+              onClick={handleSelectFolder}
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-1.5 shadow-xs transition-all active:scale-95"
+            >
+              <FolderEdit className="w-3.5 h-3.5" />
+              <span>Change Directory...</span>
+            </Button>
+            <Button
+              onClick={handleResetFolder}
+              variant="outline"
+              size="sm"
+              className="border-gray-200 hover:bg-gray-100 text-gray-700 flex items-center gap-1.5 shadow-2xs transition-all"
+              title="Reset to default music recordings directory"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-gray-500" />
+              <span>Reset Default</span>
+            </Button>
+            <Button
+              onClick={() => handleOpenFolder('recordings')}
+              variant="outline"
+              size="sm"
+              className="border-gray-200 hover:bg-gray-100 text-gray-700 flex items-center gap-1.5 shadow-2xs transition-all"
+            >
+              <FolderOpen className="w-3.5 h-3.5 text-gray-500" />
+              <span>Open in Explorer</span>
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4 p-3 bg-blue-50/70 border border-blue-100 rounded-lg flex items-center gap-2 text-xs text-blue-800">
+          <span className="font-semibold">Note:</span>
+          <span>Database indexes and vector knowledge caches are managed securely within your local user data directory.</span>
         </div>
       </div>
 
-      {/* Analytics Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6 shadow-sm">
+      {/* Analytics & Privacy Section */}
+      <div className="bg-white rounded-xl border border-gray-200/80 p-6 shadow-xs transition-all hover:border-gray-300">
         <AnalyticsConsentSwitch />
       </div>
     </div>
-  )
+  );
 }

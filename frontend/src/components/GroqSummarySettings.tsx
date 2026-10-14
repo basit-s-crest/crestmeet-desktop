@@ -170,32 +170,31 @@ export function GroqSummarySettings({
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header explanation */}
-      <div className="bg-gradient-to-r from-blue-50 via-indigo-50 to-purple-50 p-4 rounded-xl border border-blue-100 flex items-start gap-3">
-        <div className="p-2 bg-blue-600 rounded-lg text-white shadow-sm mt-0.5">
-          <Sparkles className="w-5 h-5" />
+    <div className="space-y-5">
+      {/* Header explanation banner */}
+      <div className="bg-purple-50/60 p-4 rounded-xl border border-purple-100/80 flex items-start gap-3.5">
+        <div className="p-2 bg-purple-600 rounded-lg text-white shadow-2xs mt-0.5 shrink-0">
+          <Sparkles className="w-4 h-4" />
         </div>
         <div>
-          <h4 className="font-semibold text-gray-900 text-sm">Groq Cloud AI Summarization</h4>
-          <p className="text-xs text-gray-600 mt-1 leading-relaxed">
-            Ultra-fast cloud inference on Groq's high-speed LPU processors.
-            Summarizes entire meetings in seconds.
+          <h4 className="font-semibold text-gray-900 text-sm">Groq LPU Acceleration</h4>
+          <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">
+            Ultra-fast cloud inference on Groq's high-speed Language Processing Units. Processes extensive meeting transcripts and generates structured summaries in seconds.
           </p>
         </div>
       </div>
 
       {/* Model Selection */}
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <Label className="text-sm font-semibold text-gray-800">Summary Model</Label>
-          <div className="flex items-center gap-2">
+          <Label className="text-xs font-semibold uppercase tracking-wider text-gray-500">Summary Model</Label>
+          <div className="flex items-center gap-2.5">
             {apiKey && (
               <button
                 type="button"
                 onClick={() => fetchLiveModels(apiKey)}
                 disabled={isLoadingModels}
-                className="text-xs text-gray-500 hover:text-gray-800 flex items-center gap-1"
+                className="text-xs text-gray-500 hover:text-gray-800 flex items-center gap-1 cursor-pointer"
                 title="Refresh live models from Groq"
               >
                 <RefreshCw className={`w-3 h-3 ${isLoadingModels ? "animate-spin" : ""}`} />
@@ -205,9 +204,9 @@ export function GroqSummarySettings({
             <button
               type="button"
               onClick={() => setIsCustomModel(!isCustomModel)}
-              className="text-xs text-blue-600 hover:text-blue-700 hover:underline"
+              className="text-xs text-blue-600 hover:text-blue-700 hover:underline cursor-pointer font-medium"
             >
-              {isCustomModel ? "Pick from list" : "Enter custom model"}
+              {isCustomModel ? "Pick from list" : "Custom model ID"}
             </button>
           </div>
         </div>
@@ -217,18 +216,18 @@ export function GroqSummarySettings({
             value={customModelInput}
             onChange={(e) => setCustomModelInput(e.target.value)}
             placeholder="e.g. openai/gpt-oss-120b"
-            className="h-11 font-mono text-xs bg-white"
+            className="h-10 font-mono text-xs bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-2xs"
           />
         ) : (
           <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger className="w-full h-11 bg-white border-gray-200">
+            <SelectTrigger className="w-full h-10 bg-white border-gray-200 text-sm shadow-2xs focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500">
               <SelectValue placeholder="Select Groq model" />
             </SelectTrigger>
             <SelectContent>
               {availableModels.map((m) => (
                 <SelectItem key={m.id} value={m.id}>
                   <div className="py-0.5 text-left">
-                    <span className="font-medium text-gray-900">{m.name}</span>
+                    <span className="font-medium text-gray-900 text-sm">{m.name}</span>
                     <span className="text-xs text-gray-500 block">{m.desc}</span>
                   </div>
                 </SelectItem>
@@ -239,15 +238,15 @@ export function GroqSummarySettings({
       </div>
 
       {/* API Key Input */}
-      <div className="space-y-2">
+      <div className="space-y-1.5 pt-1">
         <div className="flex items-center justify-between">
-          <Label className="text-sm font-semibold text-gray-800">Groq API Key</Label>
+          <Label className="text-xs font-semibold uppercase tracking-wider text-gray-500">Groq API Key</Label>
           <button
             type="button"
             onClick={handleOpenGroqConsole}
-            className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 hover:underline"
+            className="text-xs text-blue-600 hover:text-blue-700 font-medium flex items-center gap-1 hover:underline cursor-pointer"
           >
-            <span>Get API Key</span>
+            <span>Open Groq Console</span>
             <ExternalLink className="w-3 h-3" />
           </button>
         </div>
@@ -259,8 +258,8 @@ export function GroqSummarySettings({
             onChange={(e) => setApiKey(e.target.value)}
             disabled={isApiKeyLocked}
             placeholder="gsk_..."
-            className={`h-11 pr-20 font-mono text-xs ${
-              isApiKeyLocked ? "bg-gray-50 text-gray-500 cursor-not-allowed" : "bg-white"
+            className={`h-10 pr-20 font-mono text-xs border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-2xs ${
+              isApiKeyLocked ? "bg-slate-50 text-gray-500 cursor-not-allowed" : "bg-white"
             }`}
           />
           <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
@@ -268,18 +267,18 @@ export function GroqSummarySettings({
               type="button"
               variant="ghost"
               size="sm"
-              className="h-8 w-8 p-0 text-gray-500 hover:text-gray-700"
+              className="h-7 w-7 p-0 text-gray-400 hover:text-gray-700"
               onClick={() => setShowApiKey(!showApiKey)}
               title={showApiKey ? "Hide API key" : "Show API key"}
             >
-              {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              {showApiKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
             </Button>
             {apiKey && (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="h-8 w-8 p-0 text-gray-500 hover:text-gray-700"
+                className="h-7 w-7 p-0 text-gray-400 hover:text-gray-700"
                 onClick={() => {
                   if (isApiKeyLocked) {
                     setIsApiKeyLocked(false);
@@ -289,13 +288,13 @@ export function GroqSummarySettings({
                 }}
                 title={isApiKeyLocked ? "Unlock to edit" : "Lock key"}
               >
-                {isApiKeyLocked ? <Lock className="w-4 h-4 text-green-600" /> : <Unlock className="w-4 h-4" />}
+                {isApiKeyLocked ? <Lock className="w-3.5 h-3.5 text-emerald-600" /> : <Unlock className="w-3.5 h-3.5" />}
               </Button>
             )}
           </div>
         </div>
-        <p className="text-xs text-gray-500">
-          Your API key is saved locally on this computer only.
+        <p className="text-xs text-gray-500 leading-relaxed">
+          Your Groq API key is encrypted and stored locally on this computer only.
         </p>
       </div>
 
@@ -304,17 +303,17 @@ export function GroqSummarySettings({
         <Button
           onClick={handleSave}
           disabled={isSaving || !apiKey.trim()}
-          className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition-all"
+          className="bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg shadow-xs transition-all active:scale-95 text-sm font-medium cursor-pointer"
         >
           {isSaving ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Saving Configuration...
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>Saving Configuration...</span>
             </>
           ) : (
             <>
-              <Check className="w-4 h-4 mr-2" />
-              Save Groq Settings
+              <Check className="w-4 h-4" />
+              <span>Save Groq Settings</span>
             </>
           )}
         </Button>

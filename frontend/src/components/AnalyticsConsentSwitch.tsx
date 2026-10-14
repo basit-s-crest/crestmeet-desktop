@@ -1,7 +1,7 @@
 import React, { useContext, useState, useEffect } from 'react';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
-import { Info, Loader2, Copy, Check } from 'lucide-react';
+import { Info, Loader2, Copy, Check, ShieldCheck } from 'lucide-react';
 import { AnalyticsContext } from './AnalyticsProvider';
 import { load } from '@tauri-apps/plugin-store';
 import { invoke } from '@tauri-apps/api/core';
@@ -152,19 +152,29 @@ export default function AnalyticsConsentSwitch() {
 
   return (
     <>
-      <div className="space-y-4">
-        <div>
-          <h3 className="text-base font-semibold text-gray-800 mb-2">Usage Analytics</h3>
-          <p className="text-sm text-gray-600 mb-4">
-            Usage analytics is off by default. You can turn it on to share anonymous product and performance data; no personal content is collected.
-          </p>
+      <div className="space-y-5">
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 shrink-0">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-gray-900">Privacy & Anonymous Diagnostics</h3>
+              <span className="text-[11px] font-medium bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-100">
+                Privacy
+              </span>
+            </div>
+            <p className="text-sm text-gray-500 mt-1 leading-relaxed">
+              Anonymous product metrics help troubleshoot performance and crashes. Your meeting transcripts, audio, and personal files remain strictly local and private.
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+        <div className="flex items-center justify-between p-4 bg-slate-50/80 rounded-xl border border-slate-200/80">
           <div>
-            <h4 className="font-semibold text-gray-800">Enable Analytics</h4>
-            <p className="text-sm text-gray-600">
-              {isProcessing ? 'Updating...' : 'Off unless you choose to enable it'}
+            <h4 className="font-semibold text-gray-900 text-sm">Anonymous Usage Telemetry</h4>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {isProcessing ? 'Updating preference...' : isAnalyticsOptedIn ? 'Enabled (sharing anonymous performance data)' : 'Disabled by default'}
             </p>
           </div>
           <div className="flex items-center gap-2 ml-4">
@@ -175,39 +185,40 @@ export default function AnalyticsConsentSwitch() {
               checked={isAnalyticsOptedIn}
               onCheckedChange={handleToggle}
               disabled={isProcessing}
+              className="cursor-pointer"
             />
           </div>
         </div>
 
         {/* User ID Display */}
         {isAnalyticsOptedIn && userId && (
-          <div className="p-4 border rounded-lg bg-gray-50">
+          <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-gray-800 mb-1">Your User ID</div>
-                <p className="text-xs text-gray-600 mb-2">
-                  Share this ID when reporting issues to help us investigate your issue logs
+                <div className="font-semibold text-gray-900 text-sm mb-0.5">Anonymous Telemetry Identifier</div>
+                <p className="text-xs text-gray-500 mb-2.5">
+                  Share this identifier when contacting support or reporting bugs to help diagnose logs.
                 </p>
                 <div className="flex items-center gap-2">
-                  <code className="text-xs text-gray-700 bg-white px-2 py-1 rounded border border-gray-300 font-mono flex-1 truncate">
+                  <code className="text-xs text-gray-700 bg-white px-3 py-1.5 rounded-lg border border-gray-200 font-mono flex-1 truncate shadow-2xs select-all">
                     {userId}
                   </code>
                   <Button
                     onClick={handleCopyUserId}
                     variant="outline"
                     size="sm"
-                    className="flex-shrink-0"
+                    className="flex-shrink-0 border-gray-200 hover:bg-gray-100 shadow-2xs transition-all text-xs"
                     title="Copy User ID"
                   >
                     {isCopied ? (
                       <>
-                        <Check className="w-3.5 h-3.5 text-green-600" />
-                        <span className="text-green-600">Copied!</span>
+                        <Check className="w-3.5 h-3.5 text-emerald-600 mr-1" />
+                        <span className="text-emerald-600 font-medium">Copied</span>
                       </>
                     ) : (
                       <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy</span>
+                        <Copy className="w-3.5 h-3.5 mr-1 text-gray-500" />
+                        <span>Copy ID</span>
                       </>
                     )}
                   </Button>
@@ -217,18 +228,13 @@ export default function AnalyticsConsentSwitch() {
           </div>
         )}
 
-        <div className="flex items-start gap-2 p-2 bg-blue-50 rounded border border-blue-200">
+        <div className="flex items-start gap-2.5 p-3.5 bg-blue-50/70 rounded-xl border border-blue-100">
           <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-          <div className="text-xs text-blue-700">
-            <p className="mb-1">
-              Your meetings, transcripts, and recordings remain completely private and local.
+          <div className="text-xs text-blue-800 leading-relaxed">
+            <p className="font-medium mb-0.5">Zero Data Retention on Conversations</p>
+            <p className="text-blue-700">
+              CrestMeet never sends your audio recordings, speaker diarization, or AI summaries to telemetry servers.
             </p>
-            <button
-              onClick={handlePrivacyPolicyClick}
-              className="text-blue-600 hover:text-blue-800 underline hover:no-underline"
-            >
-              View Privacy Policy
-            </button>
           </div>
         </div>
       </div>
