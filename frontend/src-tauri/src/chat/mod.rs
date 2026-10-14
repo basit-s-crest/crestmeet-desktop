@@ -191,6 +191,223 @@ async fn fetch_query_embedding_local(query: &str) -> Option<String> {
     }
 }
 
+/// Detect general / cross-meeting overview questions (e.g. pending action items, recent decisions, deadlines, cross-meeting overview)
+fn is_general_overview_query(query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+
+    let general_phrases = [
+        "pending action item",
+        "pending action items",
+        "action items",
+        "action item",
+        "key decisions",
+        "key decision",
+        "recent key decisions",
+        "project deadlines",
+        "deadlines and milestones",
+        "deadlines & timelines",
+        "deadlines and timelines",
+        "cross-meeting overview",
+        "cross meeting overview",
+        "cross-meeting",
+        "cross meeting",
+        "across meetings",
+        "all meetings",
+        "recent meetings",
+        "latest meetings",
+        "recent meeting",
+        "latest meeting",
+        "last meeting",
+        "last meetings",
+        "last 5 meetings",
+        "latest 5 meetings",
+        "past meetings",
+        "what was discussed recently",
+        "what did we discuss recently",
+        "what did we discuss in our meetings",
+        "summarize recent",
+        "summarize latest",
+        "overview of all discussions",
+        "overview of recent",
+        "summary of recent",
+        "summary of latest",
+        "weekly progress",
+        "themes, blockers",
+        "who is responsible for each",
+        "assigned tasks",
+        "scheduled targets",
+        "milestones, release dates",
+    ];
+
+    for phrase in &general_phrases {
+        if q.contains(phrase) {
+            return true;
+        }
+    }
+
+    let has_overview = q.contains("overview")
+        || q.contains("summarize")
+        || q.contains("summary")
+        || q.contains("recap")
+        || q.contains("progress")
+        || q.contains("updates")
+        || q.contains("takeaways")
+        || q.contains("highlights");
+
+    let has_general_scope = q.contains("meetings")
+        || q.contains("meeting")
+        || q.contains("calls")
+        || q.contains("discussions")
+        || q.contains("latest")
+        || q.contains("recent");
+
+    if has_overview && has_general_scope {
+        return true;
+    }
+
+    false
+}
+
+#[derive(Debug, Clone)]
+pub struct ScopedMeetingItem {
+    pub id: String,
+    pub title: String,
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub created_at: chrono::DateTime<Utc>,
+}
+
+/// Fetch latest meetings (in recording order created_at DESC) scoped to user's assigned projects or specific project selection
+async fn fetch_latest_meetings_for_scope(
+    pool: &PgPool,
+    user_id: Option<Uuid>,
+    project_ids: Option<&[Uuid]>,
+    limit: i64,
+) -> Vec<ScopedMeetingItem> {
+    let rows = sqlx::query_as::<_, (String, String, Uuid, String, chrono::DateTime<Utc>)>(
+        r#"
+        WITH allowed_projects AS (
+            SELECT project_id, project_name FROM resolve_scope($1, $2)
+        ),
+        user_personal AS (
+            SELECT id AS project_id, name AS project_name FROM projects WHERE is_personal = true AND created_by = $2 LIMIT 1
+        )
+        SELECT m.id, m.title,
+               COALESCE(m.project_id, up.project_id, '00000000-0000-0000-0000-000000000000'::uuid) AS project_id,
+               COALESCE(ap.project_name, up.project_name, 'Personal') AS project_name,
+               COALESCE(m.created_at, NOW()) AS created_at
+        FROM meetings m
+        LEFT JOIN allowed_projects ap ON ap.project_id = m.project_id
+        LEFT JOIN user_personal up ON true
+        WHERE (
+            m.project_id IN (SELECT project_id FROM allowed_projects)
+            OR ($1 IS NULL AND m.user_id = $2 AND m.project_id IS NULL)
+        )
+        ORDER BY m.created_at DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(project_ids)
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    rows.into_iter()
+        .map(|(id, title, project_id, project_name, created_at)| ScopedMeetingItem {
+            id,
+            title,
+            project_id,
+            project_name,
+            created_at,
+        })
+        .collect()
+}
+
+/// Fetch representative chunks (summaries and top transcript chunks) for the given meeting IDs
+async fn fetch_representative_chunks_for_meetings(
+    pool: &PgPool,
+    meeting_ids: &[String],
+) -> Vec<RetrievedKnowledgeChunk> {
+    if meeting_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            String,
+            String,
+            String,
+            chrono::DateTime<Utc>,
+            String,
+            String,
+            Vec<String>,
+            Option<f64>,
+            Option<f64>,
+            i32,
+        ),
+    >(
+        r#"
+        WITH ranked_chunks AS (
+            SELECT c.id AS chunk_id,
+                   c.project_id,
+                   COALESCE(p.name, 'Personal') AS project_name,
+                   c.meeting_id,
+                   m.title AS meeting_title,
+                   COALESCE(m.created_at, NOW()) AS meeting_date,
+                   c.source_type,
+                   c.content,
+                   c.speakers,
+                   c.start_seconds,
+                   c.end_seconds,
+                   c.chunk_index,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY c.meeting_id
+                       ORDER BY 
+                           CASE WHEN c.source_type = 'summary' THEN 0 ELSE 1 END,
+                           c.chunk_index ASC
+                   ) AS rn
+            FROM knowledge_chunks c
+            JOIN meetings m ON m.id = c.meeting_id
+            LEFT JOIN projects p ON p.id = c.project_id
+            WHERE c.meeting_id = ANY($1)
+        )
+        SELECT chunk_id, project_id, project_name, meeting_id, meeting_title, meeting_date,
+               source_type, content, speakers, start_seconds, end_seconds, chunk_index
+        FROM ranked_chunks
+        WHERE rn <= 3
+        ORDER BY meeting_date DESC, rn ASC
+        "#,
+    )
+    .bind(meeting_ids)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    rows.into_iter()
+        .map(|r| RetrievedKnowledgeChunk {
+            chunk_id: r.0,
+            project_id: r.1,
+            project_name: r.2,
+            meeting_id: r.3,
+            meeting_title: r.4,
+            meeting_date: r.5,
+            source_type: r.6,
+            content: r.7,
+            speakers: r.8,
+            start_seconds: r.9,
+            end_seconds: r.10,
+            chunk_index: r.11,
+            cosine_sim: 1.0,
+            rrf_score: 1.0,
+        })
+        .collect()
+}
+
 /// Execute pgvector + FTS hybrid search using PostgreSQL RPC `search_knowledge`
 async fn search_knowledge_chunks(
     pool: &PgPool,
@@ -199,6 +416,7 @@ async fn search_knowledge_chunks(
     query_vector_str: Option<&str>,
     user_id: Option<Uuid>,
     match_count: i32,
+    meeting_ids: Option<&[String]>,
 ) -> Vec<RetrievedKnowledgeChunk> {
     let rows = sqlx::query_as::<
         _,
@@ -225,7 +443,7 @@ async fn search_knowledge_chunks(
         SELECT chunk_id, project_id, project_name, meeting_id, meeting_title, meeting_date,
                source_type, content, speakers, start_seconds, end_seconds, chunk_index,
                cosine_sim, vector_rank, text_rank, rrf_score
-        FROM search_knowledge($1, $2, CAST($3 AS vector), $4, $5)
+        FROM search_knowledge($1, $2, CAST($3 AS vector), $4, $5, $6)
         "#,
     )
     .bind(project_ids)
@@ -233,6 +451,7 @@ async fn search_knowledge_chunks(
     .bind(query_vector_str)
     .bind(user_id)
     .bind(match_count)
+    .bind(meeting_ids)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -262,6 +481,7 @@ async fn fetch_scoped_insights(
     pool: &PgPool,
     project_ids: Option<&[Uuid]>,
     user_id: Option<Uuid>,
+    meeting_ids: Option<&[String]>,
 ) -> Vec<RetrievedInsight> {
     let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
         r#"
@@ -270,12 +490,14 @@ async fn fetch_scoped_insights(
         JOIN meetings m ON m.id = mi.meeting_id
         WHERE ($1::uuid[] IS NULL OR mi.project_id = ANY($1))
           AND ($2::uuid IS NULL OR m.user_id = $2)
-        ORDER BY mi.created_at DESC
-        LIMIT 20
+          AND ($3::text[] IS NULL OR mi.meeting_id = ANY($3))
+        ORDER BY m.created_at DESC, mi.created_at DESC
+        LIMIT 30
         "#,
     )
     .bind(project_ids)
     .bind(user_id)
+    .bind(meeting_ids)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -584,25 +806,114 @@ fn clean_answer_citations(answer: &str) -> String {
     cleaned
 }
 
-/// Resolve project scope for a chat session
-async fn resolve_session_project_scope(
+/// Extract `@project:"name"` or `@project:name` from query string and return matched names + cleaned query
+fn extract_project_tags_from_query(query: &str) -> (Vec<String>, String) {
+    let re = match regex::Regex::new(r#"(?i)@project:(?:"([^"]+)"|(\S+))"#) {
+        Ok(r) => r,
+        Err(_) => return (Vec::new(), query.to_string()),
+    };
+    let mut project_names = Vec::new();
+    for cap in re.captures_iter(query) {
+        if let Some(m) = cap.get(1).or_else(|| cap.get(2)) {
+            let name = m.as_str().trim();
+            if !name.is_empty() {
+                project_names.push(name.to_string());
+            }
+        }
+    }
+    let cleaned = re.replace_all(query, "").trim().to_string();
+    (project_names, cleaned)
+}
+
+/// Dynamically resolve target project scope based on:
+/// 1. Project IDs explicitly passed from UI composer pill (if any)
+/// 2. Project tags typed inline in the query (`@project:name`)
+/// 3. Authenticated user's memberships (strict access control)
+async fn resolve_effective_project_scope(
     pool: &PgPool,
     chat_session_id: &str,
-    active_project_id: Option<Uuid>,
-) -> Option<Vec<Uuid>> {
-    let session_scope = sqlx::query_scalar::<_, Option<Vec<Uuid>>>(
-        "SELECT scope_project_ids FROM chat_sessions WHERE id::text = $1 LIMIT 1",
-    )
-    .bind(chat_session_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .flatten();
+    current_user: Option<Uuid>,
+    explicit_project_ids: Option<Vec<Uuid>>,
+    mentioned_project_names: &[String],
+) -> (Option<Vec<Uuid>>, Vec<String>) {
+    let uid = match current_user {
+        Some(u) => u,
+        None => return (None, vec!["All Projects (Unauthenticated)".to_string()]),
+    };
 
-    match session_scope {
-        Some(scopes) if !scopes.is_empty() => Some(scopes),
-        _ => active_project_id.map(|pid| vec![pid]),
+    // 1. Fetch all assigned unarchived projects for this authenticated user
+    let user_projects = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT p.id, p.name 
+        FROM project_members pm
+        JOIN projects p ON p.id = pm.project_id
+        WHERE pm.user_id = $1 AND p.is_archived = false
+        "#,
+    )
+    .bind(uid)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    if user_projects.is_empty() {
+        return (None, vec!["No Assigned Projects".to_string()]);
+    }
+
+    let mut target_ids: HashSet<Uuid> = HashSet::new();
+
+    // 2. Add explicit project IDs from UI pill (validated against user's assigned projects)
+    if let Some(pids) = explicit_project_ids {
+        for pid in pids {
+            if user_projects.iter().any(|(id, _)| *id == pid) {
+                target_ids.insert(pid);
+            }
+        }
+    }
+
+    // 3. Add any projects mentioned via `@project:name`
+    for name in mentioned_project_names {
+        let clean_name = name.trim().to_lowercase();
+        if clean_name == "all" || clean_name == "all projects" {
+            // User explicitly requested all projects via tag
+            target_ids.clear();
+            break;
+        }
+        for (id, pname) in &user_projects {
+            if pname.trim().to_lowercase() == clean_name {
+                target_ids.insert(*id);
+            }
+        }
+    }
+
+    if !target_ids.is_empty() {
+        let ids: Vec<Uuid> = target_ids.into_iter().collect();
+        let names: Vec<String> = user_projects
+            .iter()
+            .filter(|(id, _)| ids.contains(id))
+            .map(|(_, name)| name.clone())
+            .collect();
+
+        // Update chat session with this active scope
+        let _ = sqlx::query(
+            "UPDATE chat_sessions SET scope_project_ids = $1, updated_at = NOW() WHERE id::text = $2",
+        )
+        .bind(&ids)
+        .bind(chat_session_id)
+        .execute(pool)
+        .await;
+
+        (Some(ids), names)
+    } else {
+        // "All Projects" (all projects assigned to the authenticated user)
+        let all_names: Vec<String> = user_projects.iter().map(|(_, name)| name.clone()).collect();
+        let _ = sqlx::query(
+            "UPDATE chat_sessions SET scope_project_ids = NULL, updated_at = NOW() WHERE id::text = $1",
+        )
+        .bind(chat_session_id)
+        .execute(pool)
+        .await;
+
+        (None, all_names)
     }
 }
 
@@ -705,6 +1016,7 @@ pub async fn api_chat_send_message_stream(
     state: State<'_, AppState>,
     query: String,
     chat_session_id: String,
+    project_ids: Option<Vec<String>>,
     on_event: Channel<ChatStreamEvent>,
 ) -> Result<(), String> {
     let q = query.trim().to_string();
@@ -717,7 +1029,6 @@ pub async fn api_chat_send_message_stream(
 
     let pool = state.db_manager.pool().clone();
     let current_user = *state.current_user_id.read().await;
-    let active_pid = *state.active_project_id.read().await;
 
     // Send start event
     let user_msg_id = format!("msg-{}", Uuid::new_v4());
@@ -775,7 +1086,24 @@ pub async fn api_chat_send_message_stream(
         }
     };
 
-    // Step 2: Load Multi-Turn Conversation Memory & Target Model
+    // Step 2: Extract @project: tags from query & resolve effective project scope
+    let (mentioned_project_names, cleaned_user_query) = extract_project_tags_from_query(&q);
+    let explicit_uuids = project_ids.map(|ids| {
+        ids.into_iter()
+            .filter_map(|s| Uuid::parse_str(&s).ok())
+            .collect::<Vec<Uuid>>()
+    });
+
+    let (project_scope, target_project_names) = resolve_effective_project_scope(
+        &pool,
+        &chat_session_id,
+        current_user,
+        explicit_uuids,
+        &mentioned_project_names,
+    )
+    .await;
+
+    // Step 3: Load Multi-Turn Conversation Memory & Target Model
     let target_model = model_config
         .as_ref()
         .map(|c| c.model.trim())
@@ -784,25 +1112,131 @@ pub async fn api_chat_send_message_stream(
 
     let memory = load_conversation_memory(&pool, &chat_session_id, current_user).await;
 
-    // Step 3: Rewrite follow-up query into standalone search query if needed
-    let search_query = rewrite_query_for_search(&api_key, target_model, &q, &memory).await;
+    // Step 4: Check if this is a general/cross-meeting/overview question
+    let is_general_query = is_general_overview_query(&q) || is_general_overview_query(&cleaned_user_query);
+    let latest_scoped_meetings = if is_general_query {
+        fetch_latest_meetings_for_scope(&pool, current_user, project_scope.as_deref(), 5).await
+    } else {
+        Vec::new()
+    };
 
-    // Step 4: Resolve Project Scope & Retrieve Chunks
-    let project_scope = resolve_session_project_scope(&pool, &chat_session_id, active_pid).await;
+    if is_general_query && latest_scoped_meetings.is_empty() {
+        let no_meetings_msg = "You don't have any recorded meetings in your accessible project scope yet. Once you record or import meetings, I can analyze action items, decisions, and summaries for you!".to_string();
+        let _ = on_event.send(ChatStreamEvent::Token { token: no_meetings_msg.clone() });
+        let _ = on_event.send(ChatStreamEvent::Done {
+            answer: no_meetings_msg.clone(),
+            citations: Vec::new(),
+            relevancy_score: 0.0,
+            relevancy_label: "No Meetings Found".to_string(),
+            is_fallback: true,
+        });
+
+        let _ = sqlx::query(
+            "INSERT INTO chat_messages (id, user_id, chat_session_id, role, content, citations) VALUES ($1, $2, $3, 'user', $4, NULL), ($5, $2, $3, 'assistant', $6, NULL)"
+        )
+        .bind(&user_msg_id)
+        .bind(current_user)
+        .bind(&chat_session_id)
+        .bind(&q)
+        .bind(&ast_msg_id)
+        .bind(&no_meetings_msg)
+        .execute(&pool)
+        .await;
+
+        return Ok(());
+    }
+
+    let target_meeting_ids: Option<Vec<String>> = if !latest_scoped_meetings.is_empty() {
+        Some(latest_scoped_meetings.iter().map(|m| m.id.clone()).collect())
+    } else {
+        None
+    };
+
+    // Step 5: Rewrite query for search using cleaned query (free of @project: tags)
+    let query_to_rewrite = if cleaned_user_query.is_empty() { &q } else { &cleaned_user_query };
+    let search_query = rewrite_query_for_search(&api_key, target_model, query_to_rewrite, &memory).await;
+
+    // Step 6: Vector & FTS Keyword Search
     let keywords = extract_search_keywords(&search_query);
     let query_vector_str = fetch_query_embedding_local(&search_query).await;
 
-    let chunks = search_knowledge_chunks(
+    let mut chunks = search_knowledge_chunks(
         &pool,
         project_scope.as_deref(),
         &keywords,
         query_vector_str.as_deref(),
         current_user,
         15,
+        target_meeting_ids.as_deref(),
     )
     .await;
 
-    let insights = fetch_scoped_insights(&pool, project_scope.as_deref(), current_user).await;
+    // If general query, also pull representative chunks for all 5 latest meetings to ensure complete coverage
+    if let Some(ref m_ids) = target_meeting_ids {
+        let rep_chunks = fetch_representative_chunks_for_meetings(&pool, m_ids).await;
+        let mut seen_chunk_ids: HashSet<Uuid> = chunks.iter().map(|c| c.chunk_id).collect();
+        for rc in rep_chunks {
+            if seen_chunk_ids.insert(rc.chunk_id) {
+                chunks.push(rc);
+            }
+        }
+    }
+
+    let insights = fetch_scoped_insights(
+        &pool,
+        project_scope.as_deref(),
+        current_user,
+        target_meeting_ids.as_deref(),
+    )
+    .await;
+
+    // Terminal Logging for visibility
+    let mut chunk_project_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for c in &chunks {
+        *chunk_project_map.entry(c.project_name.clone()).or_insert(0) += 1;
+    }
+
+    info!("==================== [Chatbot Query] ====================");
+    info!("[Chatbot] Session ID    : {}", chat_session_id);
+    info!("[Chatbot] Raw Question  : \"{}\"", q);
+    if !cleaned_user_query.is_empty() && cleaned_user_query != q {
+        info!("[Chatbot] Cleaned Query : \"{}\"", cleaned_user_query);
+    }
+    info!("[Chatbot] Search Query  : \"{}\"", search_query);
+    info!(
+        "[Chatbot] Target Scope  : {:?} (IDs: {:?})",
+        target_project_names,
+        project_scope
+    );
+    info!(
+        "[Chatbot] Query Mode    : {}",
+        if is_general_query {
+            "GENERAL OVERVIEW -> Scoped strictly to latest 5 meetings in recorded order"
+        } else {
+            "TOPIC / SPECIFIC SEARCH -> Global semantic search across project scope"
+        }
+    );
+    if !latest_scoped_meetings.is_empty() {
+        let meeting_labels: Vec<String> = latest_scoped_meetings
+            .iter()
+            .map(|m| format!("\"{}\" [{}] ({})", m.title, m.project_name, m.created_at.format("%Y-%m-%d")))
+            .collect();
+        info!("[Chatbot] Latest 5 Mtgs : {:?}", meeting_labels);
+    }
+    info!(
+        "[Chatbot] Embedding     : {}",
+        if query_vector_str.is_some() {
+            "FastEmbed 384d Local OK (127.0.0.1:8123)"
+        } else {
+            "Local FastEmbed OFFLINE -> Falling back to PostgreSQL Keyword FTS"
+        }
+    );
+    info!(
+        "[Chatbot] Chunks Found  : {} across projects: {:?}",
+        chunks.len(),
+        chunk_project_map
+    );
+    info!("=========================================================");
 
     // Send preliminary sources
     let preliminary_sources: Vec<MeetingCitation> = chunks
@@ -828,7 +1262,7 @@ pub async fn api_chat_send_message_stream(
     });
 
     if chunks.is_empty() && insights.is_empty() {
-        let no_data_reply = "I couldn't find any relevant discussions or records for this question in your current project scope. Feel free to rephrase or switch project scopes!".to_string();
+        let no_data_reply = "I couldn't find any relevant discussions or records for this question in your selected project scope. Feel free to rephrase or mention another project (e.g. `@project:ProjectName`)!".to_string();
         let _ = on_event.send(ChatStreamEvent::Token { token: no_data_reply.clone() });
         let _ = on_event.send(ChatStreamEvent::Done {
             answer: no_data_reply.clone(),
@@ -854,7 +1288,7 @@ pub async fn api_chat_send_message_stream(
         return Ok(());
     }
 
-    // Step 5: Construct Synthesis Context with Multi-Turn Memory & Chunks
+    // Step 7: Construct Synthesis Context with Multi-Turn Memory & Chunks
     let mut context_builder = String::new();
 
     // Multi-turn conversation memory integration
@@ -873,6 +1307,21 @@ pub async fn api_chat_send_message_stream(
             context_builder.push_str(&format!("{}: {}\n", label, text.trim()));
         }
         context_builder.push_str("\n(Note: Prior assistant responses are for conversation continuity. Ground any factual claims about meetings exclusively in the RELEVANT MEETING KNOWLEDGE chunks below).\n\n");
+    }
+
+    if !latest_scoped_meetings.is_empty() {
+        context_builder.push_str("=== LATEST RECORDED MEETINGS (CHRONOLOGICAL ORDER, NEWEST FIRST) ===\n");
+        for (idx, m) in latest_scoped_meetings.iter().enumerate() {
+            context_builder.push_str(&format!(
+                "{}. \"{}\" [Project: {}] (Date: {}, ID: {})\n",
+                idx + 1,
+                m.title,
+                m.project_name,
+                m.created_at.format("%Y-%m-%d"),
+                m.id
+            ));
+        }
+        context_builder.push_str("\n(Note: The user asked a general/overview question. Focus your analysis and synthesis strictly across these latest recorded meetings in chronological order).\n\n");
     }
 
     if !chunks.is_empty() {
@@ -895,8 +1344,9 @@ pub async fn api_chat_send_message_stream(
                 String::new()
             };
             context_builder.push_str(&format!(
-                "[{}] Meeting: \"{}\" (ID: {}, Date: {}{}{})\n{}\n\n",
+                "[{}] [Project: {}] Meeting: \"{}\" (ID: {}, Date: {}{}{})\n{}\n\n",
                 s_id,
+                c.project_name,
                 c.meeting_title,
                 c.meeting_id,
                 c.meeting_date.format("%Y-%m-%d"),
@@ -927,7 +1377,7 @@ pub async fn api_chat_send_message_stream(
         context_builder.push('\n');
     }
 
-    // Step 6: System Instructions for Groq
+    // Step 8: System Instructions for Groq
     let system_prompt = r#"You are CrestMeet's AI Meeting Knowledge Assistant.
 Answer the user's question accurately using ONLY the meeting records and excerpts provided in the context.
 Rules:
@@ -935,7 +1385,9 @@ Rules:
 2. If citing decisions or action items, state the owner and due date if available.
 3. If the provided context does NOT contain enough information to answer the question, state clearly that you could not find this in their recorded meetings.
 4. Keep answers clear, professional, concise, and structured with markdown bullet points.
-5. If providing markdown tables, avoid raw HTML tags like <br>. Separate distinct items on separate rows or format them cleanly with bullet points."#;
+5. If providing markdown tables, avoid raw HTML tags like <br>. Separate distinct items on separate rows or format them cleanly with bullet points.
+6. When comparing or discussing multiple projects, clearly separate and identify which facts belong to which project. Use project names when contrasting decisions, architectures, or roadmaps.
+7. For general overview, pending action items, recent decisions, or milestone queries, summarize strictly across the latest recorded meetings listed above in chronological order. Group or highlight discussions clearly by meeting and project."#;
 
     let user_prompt = format!(
         "Context Information:\n{}\n\nUser Question: {}",
@@ -1135,6 +1587,7 @@ pub async fn api_chat_send_message(
     state: State<'_, AppState>,
     query: String,
     chat_session_id: String,
+    project_ids: Option<Vec<String>>,
 ) -> Result<ChatApiResponse, String> {
     let q = query.trim().to_string();
     if q.is_empty() {
@@ -1143,7 +1596,6 @@ pub async fn api_chat_send_message(
 
     let pool = state.db_manager.pool().clone();
     let current_user = *state.current_user_id.read().await;
-    let active_pid = *state.active_project_id.read().await;
 
     // Step 0: Check greetings
     if let Some(greeting_reply) = check_greeting(&q) {
@@ -1189,7 +1641,24 @@ pub async fn api_chat_send_message(
         }
     };
 
-    // Step 2: Load Multi-Turn Conversation Memory & Target Model
+    // Step 2: Extract @project: tags from query & resolve effective project scope
+    let (mentioned_project_names, cleaned_user_query) = extract_project_tags_from_query(&q);
+    let explicit_uuids = project_ids.map(|ids| {
+        ids.into_iter()
+            .filter_map(|s| Uuid::parse_str(&s).ok())
+            .collect::<Vec<Uuid>>()
+    });
+
+    let (project_scope, target_project_names) = resolve_effective_project_scope(
+        &pool,
+        &chat_session_id,
+        current_user,
+        explicit_uuids,
+        &mentioned_project_names,
+    )
+    .await;
+
+    // Step 3: Load Multi-Turn Conversation Memory & Target Model
     let target_model = model_config
         .as_ref()
         .map(|c| c.model.trim())
@@ -1198,30 +1667,121 @@ pub async fn api_chat_send_message(
 
     let memory = load_conversation_memory(&pool, &chat_session_id, current_user).await;
 
-    // Step 3: Rewrite follow-up query into standalone search query if needed
-    let search_query = rewrite_query_for_search(&api_key, target_model, &q, &memory).await;
+    // Step 4: Check if this is a general/cross-meeting/overview question
+    let is_general_query = is_general_overview_query(&q) || is_general_overview_query(&cleaned_user_query);
+    let latest_scoped_meetings = if is_general_query {
+        fetch_latest_meetings_for_scope(&pool, current_user, project_scope.as_deref(), 5).await
+    } else {
+        Vec::new()
+    };
 
-    // Step 4: Retrieve Chunks & Insights
-    let project_scope = resolve_session_project_scope(&pool, &chat_session_id, active_pid).await;
+    if is_general_query && latest_scoped_meetings.is_empty() {
+        return Ok(ChatApiResponse {
+            answer: "You don't have any recorded meetings in your accessible project scope yet. Once you record or import meetings, I can analyze action items, decisions, and summaries for you!".to_string(),
+            citations: Vec::new(),
+            relevancy_score: 0.0,
+            relevancy_label: "No Meetings Found".to_string(),
+            is_fallback: true,
+            recent_meetings: None,
+        });
+    }
+
+    let target_meeting_ids: Option<Vec<String>> = if !latest_scoped_meetings.is_empty() {
+        Some(latest_scoped_meetings.iter().map(|m| m.id.clone()).collect())
+    } else {
+        None
+    };
+
+    // Step 5: Rewrite follow-up query using cleaned query (free of @project: tags)
+    let query_to_rewrite = if cleaned_user_query.is_empty() { &q } else { &cleaned_user_query };
+    let search_query = rewrite_query_for_search(&api_key, target_model, query_to_rewrite, &memory).await;
+
+    // Step 6: Retrieve Chunks & Insights
     let keywords = extract_search_keywords(&search_query);
     let query_vector_str = fetch_query_embedding_local(&search_query).await;
 
-    let chunks = search_knowledge_chunks(
+    let mut chunks = search_knowledge_chunks(
         &pool,
         project_scope.as_deref(),
         &keywords,
         query_vector_str.as_deref(),
         current_user,
         15,
+        target_meeting_ids.as_deref(),
     )
     .await;
 
-    let insights = fetch_scoped_insights(&pool, project_scope.as_deref(), current_user).await;
+    // If general query, also pull representative chunks for all 5 latest meetings to ensure complete coverage
+    if let Some(ref m_ids) = target_meeting_ids {
+        let rep_chunks = fetch_representative_chunks_for_meetings(&pool, m_ids).await;
+        let mut seen_chunk_ids: HashSet<Uuid> = chunks.iter().map(|c| c.chunk_id).collect();
+        for rc in rep_chunks {
+            if seen_chunk_ids.insert(rc.chunk_id) {
+                chunks.push(rc);
+            }
+        }
+    }
+
+    let insights = fetch_scoped_insights(
+        &pool,
+        project_scope.as_deref(),
+        current_user,
+        target_meeting_ids.as_deref(),
+    )
+    .await;
+
+    // Terminal Logging for visibility
+    let mut chunk_project_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for c in &chunks {
+        *chunk_project_map.entry(c.project_name.clone()).or_insert(0) += 1;
+    }
+
+    info!("==================== [Chatbot Query Non-Streaming] ====================");
+    info!("[Chatbot] Session ID    : {}", chat_session_id);
+    info!("[Chatbot] Raw Question  : \"{}\"", q);
+    if !cleaned_user_query.is_empty() && cleaned_user_query != q {
+        info!("[Chatbot] Cleaned Query : \"{}\"", cleaned_user_query);
+    }
+    info!("[Chatbot] Search Query  : \"{}\"", search_query);
+    info!(
+        "[Chatbot] Target Scope  : {:?} (IDs: {:?})",
+        target_project_names,
+        project_scope
+    );
+    info!(
+        "[Chatbot] Query Mode    : {}",
+        if is_general_query {
+            "GENERAL OVERVIEW -> Scoped strictly to latest 5 meetings in recorded order"
+        } else {
+            "TOPIC / SPECIFIC SEARCH -> Global semantic search across project scope"
+        }
+    );
+    if !latest_scoped_meetings.is_empty() {
+        let meeting_labels: Vec<String> = latest_scoped_meetings
+            .iter()
+            .map(|m| format!("\"{}\" [{}] ({})", m.title, m.project_name, m.created_at.format("%Y-%m-%d")))
+            .collect();
+        info!("[Chatbot] Latest 5 Mtgs : {:?}", meeting_labels);
+    }
+    info!(
+        "[Chatbot] Embedding     : {}",
+        if query_vector_str.is_some() {
+            "FastEmbed 384d Local OK (127.0.0.1:8123)"
+        } else {
+            "Local FastEmbed OFFLINE -> Falling back to PostgreSQL Keyword FTS"
+        }
+    );
+    info!(
+        "[Chatbot] Chunks Found  : {} across projects: {:?}",
+        chunks.len(),
+        chunk_project_map
+    );
+    info!("=======================================================================");
 
     if chunks.is_empty() && insights.is_empty() {
         let recent = fetch_recent_meetings(&pool, current_user, project_scope.as_deref()).await;
         return Ok(ChatApiResponse {
-            answer: "I couldn't find any relevant discussions or records for this question in your current project scope. Feel free to rephrase or switch project scopes!".to_string(),
+            answer: "I couldn't find any relevant discussions or records for this question in your selected project scope. Feel free to rephrase or mention another project (e.g. `@project:ProjectName`)!".to_string(),
             citations: Vec::new(),
             relevancy_score: 0.0,
             relevancy_label: "No Relevant Records".to_string(),
@@ -1230,7 +1790,7 @@ pub async fn api_chat_send_message(
         });
     }
 
-    // Step 5: Construct Synthesis Context with Multi-Turn Memory & Chunks
+    // Step 7: Construct Synthesis Context with Multi-Turn Memory & Chunks
     let mut context_builder = String::new();
 
     if let Some(intent) = &memory.anchored_intent {
@@ -1248,6 +1808,21 @@ pub async fn api_chat_send_message(
             context_builder.push_str(&format!("{}: {}\n", label, text.trim()));
         }
         context_builder.push_str("\n(Note: Prior assistant responses are for conversation continuity. Ground any factual claims about meetings exclusively in the RELEVANT MEETING KNOWLEDGE chunks below).\n\n");
+    }
+
+    if !latest_scoped_meetings.is_empty() {
+        context_builder.push_str("=== LATEST RECORDED MEETINGS (CHRONOLOGICAL ORDER, NEWEST FIRST) ===\n");
+        for (idx, m) in latest_scoped_meetings.iter().enumerate() {
+            context_builder.push_str(&format!(
+                "{}. \"{}\" [Project: {}] (Date: {}, ID: {})\n",
+                idx + 1,
+                m.title,
+                m.project_name,
+                m.created_at.format("%Y-%m-%d"),
+                m.id
+            ));
+        }
+        context_builder.push_str("\n(Note: The user asked a general/overview question. Focus your analysis and synthesis strictly across these latest recorded meetings in chronological order).\n\n");
     }
 
     if !chunks.is_empty() {
@@ -1270,8 +1845,9 @@ pub async fn api_chat_send_message(
                 String::new()
             };
             context_builder.push_str(&format!(
-                "[{}] Meeting: \"{}\" (ID: {}, Date: {}{}{})\n{}\n\n",
+                "[{}] [Project: {}] Meeting: \"{}\" (ID: {}, Date: {}{}{})\n{}\n\n",
                 s_id,
+                c.project_name,
                 c.meeting_title,
                 c.meeting_id,
                 c.meeting_date.format("%Y-%m-%d"),
@@ -1309,7 +1885,9 @@ Rules:
 2. If citing decisions or action items, state the owner and due date if available.
 3. If the provided context does NOT contain enough information to answer the question, state clearly that you could not find this in their recorded meetings.
 4. Keep answers clear, professional, concise, and structured with markdown bullet points.
-5. If providing markdown tables, avoid raw HTML tags like <br>. Separate distinct items on separate rows or format them cleanly with bullet points."#;
+5. If providing markdown tables, avoid raw HTML tags like <br>. Separate distinct items on separate rows or format them cleanly with bullet points.
+6. When comparing or discussing multiple projects, clearly separate and identify which facts belong to which project. Use project names when contrasting decisions, architectures, or roadmaps.
+7. For general overview, pending action items, recent decisions, or milestone queries, summarize strictly across the latest recorded meetings listed above in chronological order. Group or highlight discussions clearly by meeting and project."#;
 
     let user_prompt = format!(
         "Context Information:\n{}\n\nUser Question: {}",

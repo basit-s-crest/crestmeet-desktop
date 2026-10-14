@@ -469,7 +469,8 @@ impl DatabaseManager {
                 SELECT pm.project_id, p.name
                 FROM project_members pm 
                 JOIN projects p ON p.id = pm.project_id
-                WHERE (p_user_id IS NULL OR pm.user_id = p_user_id)
+                WHERE p_user_id IS NOT NULL
+                  AND pm.user_id = p_user_id
                   AND p.is_archived = false
                   AND (p_project_ids IS NULL OR pm.project_id = ANY(p_project_ids));
             $$;

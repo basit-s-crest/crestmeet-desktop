@@ -12,7 +12,6 @@ import {
   Bot,
   User as UserIcon,
   RotateCcw,
-  Layers,
   ArrowUpRight,
   HelpCircle,
   Loader2,
@@ -30,6 +29,8 @@ import {
   Download,
   FileText,
   Printer,
+  Globe,
+  AtSign,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -179,6 +180,24 @@ function ChatPageContent() {
   const [isSessionsLoading, setIsSessionsLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
+  // Scope selection in input composer: null means "All Projects", or array of project UUIDs
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[] | null>(
+    activeProject ? [activeProject.id] : null
+  );
+
+  // Mention autocomplete popup state
+  const [mentionState, setMentionState] = useState<{
+    isOpen: boolean;
+    filter: string;
+    cursorPosition: number;
+    selectedIndex: number;
+  }>({
+    isOpen: false,
+    filter: '',
+    cursorPosition: 0,
+    selectedIndex: 0,
+  });
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputQuery, setInputQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -189,6 +208,27 @@ function ChatPageContent() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const loadedSessionRef = useRef<string | null>(null);
+
+  const handleSwitchScope = async (projectIds: string[] | null) => {
+    setSelectedProjectIds(projectIds);
+    if (activeSessionId) {
+      try {
+        await invoke('api_chat_update_session_scope', {
+          sessionId: activeSessionId,
+          scopeProjectIds: projectIds,
+        });
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === activeSessionId
+              ? { ...s, scopeProjectIds: projectIds || undefined }
+              : s
+          )
+        );
+      } catch (err) {
+        console.warn('Could not update session scope in DB:', err);
+      }
+    }
+  };
 
   const loadChatHistory = async (sessionId: string) => {
     setIsHistoryLoading(true);
@@ -207,7 +247,7 @@ function ChatPageContent() {
 
   const handleNewChat = async () => {
     try {
-      const scopeIds = activeProject ? [activeProject.id] : undefined;
+      const scopeIds = selectedProjectIds && selectedProjectIds.length > 0 ? selectedProjectIds : undefined;
       const newSession = await invoke<ChatSessionRecord>('api_chat_create_session', {
         scopeProjectIds: scopeIds,
         title: 'New Conversation',
@@ -240,6 +280,12 @@ function ChatPageContent() {
         loadedSessionRef.current = targetSessionId;
         setActiveSessionId(targetSessionId);
         loadChatHistory(targetSessionId);
+        const match = list.find((s) => s.id === targetSessionId);
+        if (match && match.scopeProjectIds && match.scopeProjectIds.length > 0) {
+          setSelectedProjectIds(match.scopeProjectIds);
+        } else {
+          setSelectedProjectIds(null);
+        }
       } else {
         // New chat requested: start with clean slate
         // If the top session is already empty and unused, reuse it
@@ -247,6 +293,11 @@ function ChatPageContent() {
           loadedSessionRef.current = list[0].id;
           setActiveSessionId(list[0].id);
           setMessages([]);
+          if (list[0].scopeProjectIds && list[0].scopeProjectIds.length > 0) {
+            setSelectedProjectIds(list[0].scopeProjectIds);
+          } else {
+            setSelectedProjectIds(null);
+          }
         } else {
           await handleNewChat();
         }
@@ -269,8 +320,14 @@ function ChatPageContent() {
       loadedSessionRef.current = urlSessionId;
       setActiveSessionId(urlSessionId);
       loadChatHistory(urlSessionId);
+      const session = sessions.find((s) => s.id === urlSessionId);
+      if (session && session.scopeProjectIds && session.scopeProjectIds.length > 0) {
+        setSelectedProjectIds(session.scopeProjectIds);
+      } else {
+        setSelectedProjectIds(null);
+      }
     }
-  }, [urlSessionId]);
+  }, [urlSessionId, sessions]);
 
   // Listen for sidebar new chat button event
   useEffect(() => {
@@ -281,7 +338,7 @@ function ChatPageContent() {
     return () => {
       window.removeEventListener('crestmeet_new_chat', handleNewChatEvent);
     };
-  }, [activeProject]);
+  }, [selectedProjectIds]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -294,6 +351,12 @@ function ChatPageContent() {
     setActiveSessionId(sessionId);
     loadChatHistory(sessionId);
     router.replace(`/chat?session_id=${encodeURIComponent(sessionId)}`);
+    const session = sessions.find((s) => s.id === sessionId);
+    if (session && session.scopeProjectIds && session.scopeProjectIds.length > 0) {
+      setSelectedProjectIds(session.scopeProjectIds);
+    } else {
+      setSelectedProjectIds(null);
+    }
   };
 
   const handleRenameSession = async (sessionId: string, newTitle: string) => {
@@ -447,6 +510,7 @@ function ChatPageContent() {
       await invoke('api_chat_send_message_stream', {
         query,
         chatSessionId: activeSessionId,
+        projectIds: selectedProjectIds,
         onEvent: channel,
       });
 
@@ -462,6 +526,7 @@ function ChatPageContent() {
         const response = await invoke<ChatApiResponse>('api_chat_send_message', {
           query,
           chatSessionId: activeSessionId,
+          projectIds: selectedProjectIds,
         });
 
         setMessages((prev) =>
@@ -529,7 +594,127 @@ function ChatPageContent() {
     router.push(`/meeting-details?id=${meetingId}${timeParam}${endParam}${queryParam}${sessionParam}`);
   };
 
+  const unarchivedProjects = projects.filter((p) => !p.is_archived);
+
+  // Derive Scope Pill display label
+  const getScopeLabel = () => {
+    if (!selectedProjectIds || selectedProjectIds.length === 0) {
+      return { type: 'all' as const, label: 'All Projects' };
+    }
+    if (selectedProjectIds.length === 1) {
+      const proj = unarchivedProjects.find((p) => p.id === selectedProjectIds[0]);
+      return { type: 'single' as const, label: proj ? proj.name : '1 Project' };
+    }
+    return { type: 'multi' as const, label: `${selectedProjectIds.length} Projects` };
+  };
+
+  const scopeInfo = getScopeLabel();
+
+  // Suggestions for @project:<first_letter...>
+  const mentionSuggestions = [
+    { id: 'ALL', name: 'All Projects', isAll: true },
+    ...unarchivedProjects.map((p) => ({ id: p.id, name: p.name, isAll: false })),
+  ];
+
+  // Only show suggestions when user has typed at least 1 character after @project:
+  const filteredMentionSuggestions = mentionSuggestions.filter((item) => {
+    if (!mentionState.filter || mentionState.filter.trim().length === 0) return false;
+    const f = mentionState.filter.trim().toLowerCase();
+    return item.name.toLowerCase().startsWith(f);
+  });
+
+  const handleInsertProjectTag = () => {
+    const currentVal = inputQuery;
+    const cursorPos = textareaRef.current?.selectionStart ?? currentVal.length;
+    const textBefore = currentVal.slice(0, cursorPos);
+    const textAfter = currentVal.slice(cursorPos);
+
+    const needsLeadingSpace = textBefore.length > 0 && !textBefore.endsWith(' ');
+    const tag = needsLeadingSpace ? ' @project:' : '@project:';
+    const newQuery = textBefore + tag + textAfter;
+
+    setInputQuery(newQuery);
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        const nextPos = textBefore.length + tag.length;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(nextPos, nextPos);
+      }
+    }, 10);
+  };
+
+  const handleSelectMention = (item: { id: string; name: string; isAll: boolean }) => {
+    const val = inputQuery;
+    const cursorPos = mentionState.cursorPosition;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const textAfterCursor = val.slice(cursorPos);
+
+    const match = textBeforeCursor.match(/(?:^|\s)@project:([a-zA-Z0-9_\-\s]*)$/i);
+    if (match) {
+      const matchIndex = textBeforeCursor.lastIndexOf(match[0]);
+      const leadingSpace = match[0].startsWith(' ') ? ' ' : '';
+      const prefix = textBeforeCursor.slice(0, matchIndex) + leadingSpace;
+      const hasSpaces = item.name.includes(' ');
+      const formattedName = hasSpaces ? `"${item.name}"` : item.name;
+      const tagText = item.isAll ? '@project:all ' : `@project:${formattedName} `;
+      const newQuery = prefix + tagText + textAfterCursor;
+      setInputQuery(newQuery);
+
+      if (item.isAll) {
+        handleSwitchScope(null);
+      } else {
+        handleSwitchScope([item.id]);
+      }
+
+      setMentionState({ isOpen: false, filter: '', cursorPosition: 0, selectedIndex: 0 });
+
+      setTimeout(() => {
+        if (textareaRef.current) {
+          const nextPos = prefix.length + tagText.length;
+          textareaRef.current.focus();
+          textareaRef.current.setSelectionRange(nextPos, nextPos);
+        }
+      }, 10);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // If mention suggestions popup is open, handle navigation keys
+    if (mentionState.isOpen && filteredMentionSuggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionState((prev) => ({
+          ...prev,
+          selectedIndex: (prev.selectedIndex + 1) % filteredMentionSuggestions.length,
+        }));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionState((prev) => ({
+          ...prev,
+          selectedIndex:
+            (prev.selectedIndex - 1 + filteredMentionSuggestions.length) %
+            filteredMentionSuggestions.length,
+        }));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected = filteredMentionSuggestions[mentionState.selectedIndex];
+        if (selected) {
+          handleSelectMention(selected);
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMentionState((prev) => ({ ...prev, isOpen: false }));
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
@@ -537,9 +722,34 @@ function ChatPageContent() {
   };
 
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInputQuery(e.target.value);
+    const val = e.target.value;
+    const cursorPos = e.target.selectionStart;
+    setInputQuery(val);
     e.target.style.height = 'auto';
     e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
+
+    // Detect @project: trigger (case-insensitive)
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const mentionMatch = textBeforeCursor.match(/(?:^|\s)@project:([a-zA-Z0-9_\-\s]*)$/i);
+
+    if (mentionMatch) {
+      const queryFilter = (mentionMatch[1] || '').trim();
+      // Render nothing until user types first letter
+      if (queryFilter.length >= 1) {
+        setMentionState({
+          isOpen: true,
+          filter: queryFilter,
+          cursorPosition: cursorPos,
+          selectedIndex: 0,
+        });
+      } else {
+        setMentionState((prev) => ({ ...prev, isOpen: false, filter: '' }));
+      }
+    } else {
+      if (mentionState.isOpen) {
+        setMentionState((prev) => ({ ...prev, isOpen: false, filter: '' }));
+      }
+    }
   };
 
   const handleExportMarkdown = () => {
@@ -640,68 +850,14 @@ function ChatPageContent() {
               {isSidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
             </button>
 
-            <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-900/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-2xs">
+            <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-900/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-2xs shrink-0">
               <Sparkles className="w-4 h-4" />
             </div>
 
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-sm font-semibold text-slate-900 dark:text-zinc-100 tracking-tight">
-                  {currentSessionRecord?.title || 'AI Meeting Assistant'}
-                </h1>
-
-                {/* Interactive Project Scope Selector */}
-                {projects.length > 0 && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-indigo-50/90 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/60 hover:bg-indigo-100/80 transition-colors cursor-pointer"
-                        title="Click to switch active project scope"
-                      >
-                        <Briefcase className="w-3 h-3 text-indigo-500" />
-                        <span>Scope: {activeProject?.name || 'All Meetings'}</span>
-                        <ChevronDown className="w-3 h-3 text-indigo-400 ml-0.5" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent
-                      align="start"
-                      className="w-48 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 text-xs shadow-md rounded-xl p-1"
-                    >
-                      <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        Select Project Scope
-                      </div>
-                      {projects
-                        .filter((p) => !p.is_archived)
-                        .map((proj) => (
-                          <DropdownMenuItem
-                            key={proj.id}
-                            onClick={() => switchProject(proj.id)}
-                            className={`gap-2 cursor-pointer rounded-lg py-1.5 ${
-                              activeProject?.id === proj.id
-                                ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 font-medium'
-                                : 'text-slate-700 dark:text-zinc-300'
-                            }`}
-                          >
-                            <span className="truncate">{proj.name}</span>
-                            {activeProject?.id === proj.id && (
-                              <Check className="w-3.5 h-3.5 ml-auto text-indigo-600" />
-                            )}
-                          </DropdownMenuItem>
-                        ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-
-              <p className="text-[11px] text-slate-500 dark:text-zinc-400 flex items-center gap-1.5 mt-0.5">
-                <Layers className="w-3.5 h-3.5 text-slate-400 dark:text-zinc-500" />
-                <span>
-                  Searching across{' '}
-                  <strong className="text-slate-700 dark:text-zinc-300 font-medium">
-                    {meetings.length} meeting{meetings.length === 1 ? '' : 's'}
-                  </strong>
-                </span>
-              </p>
+            <div className="min-w-0">
+              <h1 className="text-sm font-semibold text-slate-900 dark:text-zinc-100 tracking-tight truncate max-w-md">
+                {currentSessionRecord?.title || 'AI Meeting Assistant'}
+              </h1>
             </div>
           </div>
 
@@ -945,7 +1101,13 @@ function ChatPageContent() {
                                           [{cite.label}]
                                         </span>
                                       )}
-                                      <Calendar className="w-3.5 h-3.5 text-slate-400 group-hover/cite:text-indigo-500 transition-colors" />
+                                      {cite.projectName && (
+                                        <span className="text-[10px] font-medium text-slate-400 dark:text-zinc-500 max-w-[85px] truncate">
+                                          {cite.projectName}
+                                          <span className="mx-1 text-slate-300 dark:text-zinc-700 font-normal">/</span>
+                                        </span>
+                                      )}
+                                      <Calendar className="w-3.5 h-3.5 text-slate-400 group-hover/cite:text-indigo-500 transition-colors shrink-0" />
                                       <span className="font-semibold text-slate-800 dark:text-zinc-200 group-hover/cite:text-indigo-600 dark:group-hover/cite:text-indigo-400 max-w-[200px] truncate">
                                         {cite.meetingTitle}
                                       </span>
@@ -1001,31 +1163,86 @@ function ChatPageContent() {
         </main>
 
         {/* Input Composer Footer */}
-        <footer className="flex-shrink-0 bg-white dark:bg-zinc-900 border-t border-slate-200/90 dark:border-zinc-800 px-4 lg:px-8 py-3.5 print:hidden">
-          <div className="max-w-3xl mx-auto">
-            <div className="relative flex items-center bg-slate-50/80 dark:bg-zinc-950/70 border border-slate-200/90 dark:border-zinc-800 rounded-2xl focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all p-1.5 shadow-2xs">
+        <footer className="flex-shrink-0 bg-white dark:bg-zinc-900 border-t border-slate-200/90 dark:border-zinc-800 px-4 lg:px-8 py-3 print:hidden">
+          <div className="max-w-3xl mx-auto relative">
+            {/* Mention Suggestions Floating Dropdown */}
+            {mentionState.isOpen && filteredMentionSuggestions.length > 0 && (
+              <div className="absolute bottom-full left-0 mb-2 w-52 bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 rounded-xl shadow-lg overflow-hidden z-50 p-1 text-xs animate-in fade-in duration-100">
+                <div className="max-h-52 overflow-y-auto space-y-0.5">
+                  {filteredMentionSuggestions.map((item, idx) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleSelectMention(item);
+                      }}
+                      className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors cursor-pointer ${
+                        mentionState.selectedIndex === idx
+                          ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-medium'
+                          : 'text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-800/70'
+                      }`}
+                    >
+                      {item.isAll ? (
+                        <Globe className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                      ) : (
+                        <Briefcase className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                      )}
+                      <span className="flex-1 truncate font-medium">{item.name}</span>
+                      {mentionState.selectedIndex === idx && (
+                        <span className="text-[10px] text-indigo-400 dark:text-indigo-500 font-mono">↵</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Main Input Composer Box */}
+            <div className="flex flex-col bg-slate-50/80 dark:bg-zinc-950/70 border border-slate-200/90 dark:border-zinc-800 rounded-2xl focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all p-2 shadow-2xs">
               <textarea
                 ref={textareaRef}
                 value={inputQuery}
                 onChange={handleTextareaInput}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask about decisions, action items, or meetings... (Enter to send, Shift+Enter for newline)"
+                placeholder="Ask about decisions, action items, or type @project: to filter... (Enter to send, Shift+Enter for newline)"
                 rows={1}
                 disabled={isLoading}
-                className="w-full bg-transparent resize-none border-0 focus:ring-0 focus:outline-none text-xs text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 px-3 py-1.5 max-h-36 leading-relaxed"
+                className="w-full bg-transparent resize-none border-0 focus:ring-0 focus:outline-none text-xs text-slate-900 dark:text-zinc-100 placeholder:text-slate-400 dark:placeholder:text-zinc-500 px-2 py-1 max-h-36 leading-relaxed"
               />
-              <button
-                onClick={() => handleSendMessage()}
-                disabled={!inputQuery.trim() || isLoading}
-                className="flex-shrink-0 w-8 h-8 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 disabled:bg-slate-200 dark:disabled:bg-zinc-800 text-white disabled:text-slate-400 dark:disabled:text-zinc-600 flex items-center justify-center transition-all ml-1.5 shadow-xs"
-                title="Send message"
-              >
-                <Send className="w-3.5 h-3.5" />
-              </button>
+
+              {/* Bottom Row: Scope Pill + Send */}
+              <div className="flex items-center justify-between pt-1.5 mt-1 border-t border-slate-200/50 dark:border-zinc-800/50 px-1">
+                {/* Professional @project Pill Button */}
+                <button
+                  type="button"
+                  onClick={handleInsertProjectTag}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-200 bg-slate-100/90 hover:bg-slate-200/80 dark:bg-zinc-800 dark:hover:bg-zinc-700/80 border border-slate-200 dark:border-zinc-700 transition-all cursor-pointer shadow-2xs active:scale-95"
+                  title="Filter by project: inserts @project:"
+                >
+                  <AtSign className="w-3.5 h-3.5 text-indigo-500" />
+                  <span className="font-mono text-xs font-semibold text-indigo-600 dark:text-indigo-400">project</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <span className="hidden sm:inline text-[10px] text-slate-400 dark:text-zinc-500 font-mono">
+                    Shift+Enter for newline
+                  </span>
+                  <button
+                    onClick={() => handleSendMessage()}
+                    disabled={!inputQuery.trim() || isLoading}
+                    className="w-8 h-8 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 disabled:bg-slate-200 dark:disabled:bg-zinc-800 text-white disabled:text-slate-400 dark:disabled:text-zinc-600 flex items-center justify-center transition-all shadow-xs cursor-pointer"
+                    title="Send message"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
             </div>
+
             <div className="flex items-center justify-between text-[10px] text-slate-400 dark:text-zinc-500 px-2 pt-1.5">
-              <span>Answers synthesized using in-scope meeting transcripts & verified citations</span>
-              <span>Markdown supported</span>
+              <span>Answers synthesized using verified meeting citations & cross-project analysis</span>
+              <span>Type @project to filter scope</span>
             </div>
           </div>
         </footer>

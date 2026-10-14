@@ -243,6 +243,30 @@ impl ChatSessionRepository {
 
         Ok(res.rows_affected() > 0)
     }
+
+    /// Update session scope
+    pub async fn update_session_scope(
+        pool: &PgPool,
+        user_id: Uuid,
+        session_id: Uuid,
+        scope_project_ids: Option<Vec<Uuid>>,
+    ) -> Result<bool, String> {
+        let res = sqlx::query(
+            r#"
+            UPDATE chat_sessions
+            SET scope_project_ids = $1, updated_at = NOW()
+            WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(scope_project_ids)
+        .bind(session_id)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update session scope: {}", e))?;
+
+        Ok(res.rows_affected() > 0)
+    }
 }
 
 // ============================================================================
@@ -341,4 +365,24 @@ pub async fn api_chat_delete_session(
     let sid = Uuid::parse_str(&session_id).map_err(|_| "Invalid session ID format".to_string())?;
 
     ChatSessionRepository::delete_session(pool, uid, sid).await
+}
+
+#[tauri::command]
+pub async fn api_chat_update_session_scope(
+    state: State<'_, AppState>,
+    session_id: String,
+    scope_project_ids: Option<Vec<String>>,
+) -> Result<bool, String> {
+    let pool = state.db_manager.pool();
+    let user_id = *state.current_user_id.read().await;
+    let uid = user_id.ok_or_else(|| "Authentication required".to_string())?;
+    let sid = Uuid::parse_str(&session_id).map_err(|_| "Invalid session ID format".to_string())?;
+
+    let scopes = scope_project_ids.map(|v| {
+        v.into_iter()
+            .filter_map(|s| Uuid::parse_str(&s).ok())
+            .collect()
+    });
+
+    ChatSessionRepository::update_session_scope(pool, uid, sid, scopes).await
 }

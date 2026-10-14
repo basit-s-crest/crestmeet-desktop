@@ -820,6 +820,7 @@ pub fn run() {
             chat::api_chat_pin_session,
             chat::api_chat_archive_session,
             chat::api_chat_delete_session,
+            chat::api_chat_update_session_scope,
             chat::api_chat_create_share,
             chat::api_chat_get_shared,
             chat::api_chat_fork_shared,
