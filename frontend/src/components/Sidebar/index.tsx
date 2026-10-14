@@ -63,6 +63,13 @@ const Sidebar: React.FC = () => {
   const isChatPage = pathname === '/chat';
   const isSettingsPage = pathname === '/settings';
 
+  const handleOpenChat = () => {
+    if (isChatPage) {
+      window.dispatchEvent(new CustomEvent('crestmeet_new_chat'));
+    }
+    router.push('/chat');
+  };
+
   const renderCollapsedIcons = () => {
     if (!isCollapsed) return null;
 
@@ -157,7 +164,7 @@ const Sidebar: React.FC = () => {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={() => router.push('/chat')}
+                onClick={handleOpenChat}
                 className={`p-2.5 rounded-xl transition-all duration-150 relative ${
                   isChatPage
                     ? 'bg-indigo-50 text-indigo-600 shadow-xs'
@@ -279,7 +286,7 @@ const Sidebar: React.FC = () => {
               {/* AI Assistant */}
               <button
                 type="button"
-                onClick={() => router.push('/chat')}
+                onClick={handleOpenChat}
                 className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
                   isChatPage
                     ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-xs'

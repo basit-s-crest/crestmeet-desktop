@@ -8,6 +8,7 @@ import { MeetingVideoPlayer } from './MeetingVideoPlayer';
 import { useMemo, useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuth } from '@/contexts/AuthContext';
+import { useGoogleDriveUpload } from '@/contexts/GoogleDriveUploadContext';
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -125,21 +126,38 @@ export function TranscriptPanel({
     };
   }, [meetingFolderPath]);
 
-  // If a timestamp seek event fires from transcript, automatically reveal video player
+  const { activeUploads, syncedMeetings } = useGoogleDriveUpload();
+  const liveJob = meetingId ? activeUploads[meetingId] : undefined;
+  const syncedInfo = meetingId ? syncedMeetings[meetingId] : undefined;
+  const effectiveDriveFileId =
+    liveJob?.drive_file_id || syncedInfo?.drive_file_id || driveFileId;
+
+  // Meeting has a video ONLY if:
+  // - explicitly flagged hasVideo
+  // - has a valid Google Drive file ID
+  // - has a valid video URL
+  // - has an active background upload job
+  // - has a physical video file found locally on disk
+  const hasVideoRecording = Boolean(
+    hasVideo ||
+    (effectiveDriveFileId && effectiveDriveFileId.trim() !== '') ||
+    (videoUrl && videoUrl.trim() !== '') ||
+    Boolean(liveJob) ||
+    hasLocalVideo
+  );
+
+  // If a timestamp seek event fires from transcript, reveal video player if video exists
   useEffect(() => {
     const handleSeek = () => {
-      setIsVideoPlayerOpen(true);
+      if (hasVideoRecording) {
+        setIsVideoPlayerOpen(true);
+      }
     };
     window.addEventListener('crestmeet_seek_video', handleSeek);
     return () => {
       window.removeEventListener('crestmeet_seek_video', handleSeek);
     };
-  }, []);
-
-  // Meeting has a video if flagged in DB, stored in Drive, or present locally
-  const hasVideoRecording = Boolean(
-    hasVideo || driveFileId || videoUrl || uploadStatus || hasLocalVideo
-  );
+  }, [hasVideoRecording]);
 
   // Only allow opening folder if this device actually has the folder and user recorded it
   const isRecorder = !recorderId || !user?.id || user.id === recorderId;

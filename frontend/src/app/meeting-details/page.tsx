@@ -36,7 +36,20 @@ function MeetingDetailsContent() {
   const { activeProject } = useProject();
   const router = useRouter();
 
+  const from = searchParams.get('from');
+  const sessionId = searchParams.get('session_id');
+  const isFromChat = from === 'chat';
+
   const handleBackToProjects = () => {
+    if (isFromChat) {
+      if (sessionId) {
+        router.push(`/chat?session_id=${encodeURIComponent(sessionId)}`);
+      } else {
+        router.push('/chat');
+      }
+      return;
+    }
+
     if (activeProject) {
       router.push(`/meetings?project=${activeProject.id}`);
     } else {
@@ -366,10 +379,10 @@ function MeetingDetailsContent() {
           <button
             onClick={handleBackToProjects}
             className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-gray-100 cursor-pointer border border-gray-200 shadow-2xs"
-            title="Return to Projects page"
+            title={isFromChat ? "Return to Chat" : "Return to Projects page"}
           >
             <ArrowLeft className="w-4 h-4 text-gray-600" />
-            <span>Back to Projects</span>
+            <span>{isFromChat ? 'Back to Chat' : 'Back to Projects'}</span>
           </button>
         </div>
         <div className="flex-1 flex items-center justify-center p-6">
@@ -379,7 +392,7 @@ function MeetingDetailsContent() {
               onClick={handleBackToProjects}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
             >
-              Back to Projects
+              {isFromChat ? 'Back to Chat' : 'Back to Projects'}
             </button>
           </div>
         </div>
@@ -395,10 +408,10 @@ function MeetingDetailsContent() {
           <button
             onClick={handleBackToProjects}
             className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-gray-100 cursor-pointer border border-gray-200 shadow-2xs"
-            title="Return to Projects page"
+            title={isFromChat ? "Return to Chat" : "Return to Projects page"}
           >
             <ArrowLeft className="w-4 h-4 text-gray-600" />
-            <span>Back to Projects</span>
+            <span>{isFromChat ? 'Back to Chat' : 'Back to Projects'}</span>
           </button>
         </div>
         <div className="flex-1 flex items-center justify-center">

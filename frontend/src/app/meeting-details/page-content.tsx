@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
 import { Summary, SummaryResponse } from '@/types';
 import { useSidebar } from '@/components/Sidebar/SidebarProvider';
@@ -61,9 +61,23 @@ export default function PageContent({
 
   // Routing & Project Context
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { activeProject } = useProject();
 
+  const fromParam = searchParams.get('from');
+  const sessionIdParam = searchParams.get('session_id');
+  const isFromChat = fromParam === 'chat';
+
   const handleBackToProjects = () => {
+    if (isFromChat) {
+      if (sessionIdParam) {
+        router.push(`/chat?session_id=${encodeURIComponent(sessionIdParam)}`);
+      } else {
+        router.push('/chat');
+      }
+      return;
+    }
+
     if (activeProject) {
       router.push(`/meetings?project=${activeProject.id}`);
     } else {
@@ -240,10 +254,10 @@ export default function PageContent({
           <button
             onClick={handleBackToProjects}
             className="flex items-center gap-1.5 text-xs sm:text-sm font-semibold text-gray-700 hover:text-gray-900 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-gray-100 cursor-pointer border border-gray-200 shadow-2xs shrink-0"
-            title="Return to Projects page"
+            title={isFromChat ? "Return to Chat" : "Return to Projects page"}
           >
             <ArrowLeft className="w-4 h-4 text-gray-600" />
-            <span>Back to Projects</span>
+            <span>{isFromChat ? 'Back to Chat' : 'Back to Projects'}</span>
           </button>
 
           <div className="h-4 w-[1px] bg-gray-200 hidden sm:block shrink-0" />

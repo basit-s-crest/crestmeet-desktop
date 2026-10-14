@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   MessageSquareText,
   Sparkles,
@@ -166,8 +166,11 @@ const SUGGESTED_PROMPTS = [
   },
 ];
 
-export default function ChatPage() {
+function ChatPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlSessionId = searchParams.get('session_id');
+
   const { meetings, setCurrentMeeting } = useSidebar();
   const { activeProject, projects, switchProject } = useProject();
 
@@ -185,37 +188,7 @@ export default function ChatPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  // Load chat sessions on mount
-  useEffect(() => {
-    loadSessions();
-  }, []);
-
-  // Auto-scroll to bottom on new messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading]);
-
-  const loadSessions = async () => {
-    setIsSessionsLoading(true);
-    try {
-      const list = await invoke<ChatSessionRecord[]>('api_chat_list_sessions', {
-        includeArchived: false,
-      });
-      setSessions(list);
-
-      if (list.length > 0 && !activeSessionId) {
-        setActiveSessionId(list[0].id);
-        loadChatHistory(list[0].id);
-      } else if (list.length === 0) {
-        handleNewChat();
-      }
-    } catch (err) {
-      console.warn('Could not load sessions:', err);
-    } finally {
-      setIsSessionsLoading(false);
-    }
-  };
+  const loadedSessionRef = useRef<string | null>(null);
 
   const loadChatHistory = async (sessionId: string) => {
     setIsHistoryLoading(true);
@@ -232,12 +205,6 @@ export default function ChatPage() {
     }
   };
 
-  const handleSelectSession = (sessionId: string) => {
-    if (activeSessionId === sessionId) return;
-    setActiveSessionId(sessionId);
-    loadChatHistory(sessionId);
-  };
-
   const handleNewChat = async () => {
     try {
       const scopeIds = activeProject ? [activeProject.id] : undefined;
@@ -247,13 +214,86 @@ export default function ChatPage() {
       });
 
       setSessions((prev) => [newSession, ...prev]);
+      loadedSessionRef.current = newSession.id;
       setActiveSessionId(newSession.id);
       setMessages([]);
+      router.replace('/chat');
     } catch (err: any) {
       const fallbackId = `session-${Date.now()}`;
+      loadedSessionRef.current = fallbackId;
       setActiveSessionId(fallbackId);
       setMessages([]);
+      router.replace('/chat');
     }
+  };
+
+  const loadSessions = async (targetSessionId?: string | null) => {
+    setIsSessionsLoading(true);
+    try {
+      const list = await invoke<ChatSessionRecord[]>('api_chat_list_sessions', {
+        includeArchived: false,
+      });
+      setSessions(list);
+
+      if (targetSessionId) {
+        // Return to specific session requested in URL (e.g. Back from Meeting Details)
+        loadedSessionRef.current = targetSessionId;
+        setActiveSessionId(targetSessionId);
+        loadChatHistory(targetSessionId);
+      } else {
+        // New chat requested: start with clean slate
+        // If the top session is already empty and unused, reuse it
+        if (list.length > 0 && list[0].messageCount === 0) {
+          loadedSessionRef.current = list[0].id;
+          setActiveSessionId(list[0].id);
+          setMessages([]);
+        } else {
+          await handleNewChat();
+        }
+      }
+    } catch (err) {
+      console.warn('Could not load sessions:', err);
+    } finally {
+      setIsSessionsLoading(false);
+    }
+  };
+
+  // Load chat sessions on mount
+  useEffect(() => {
+    loadSessions(urlSessionId);
+  }, []);
+
+  // When urlSessionId changes (e.g. navigating back from citation)
+  useEffect(() => {
+    if (urlSessionId && urlSessionId !== loadedSessionRef.current) {
+      loadedSessionRef.current = urlSessionId;
+      setActiveSessionId(urlSessionId);
+      loadChatHistory(urlSessionId);
+    }
+  }, [urlSessionId]);
+
+  // Listen for sidebar new chat button event
+  useEffect(() => {
+    const handleNewChatEvent = () => {
+      handleNewChat();
+    };
+    window.addEventListener('crestmeet_new_chat', handleNewChatEvent);
+    return () => {
+      window.removeEventListener('crestmeet_new_chat', handleNewChatEvent);
+    };
+  }, [activeProject]);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
+
+  const handleSelectSession = (sessionId: string) => {
+    if (activeSessionId === sessionId) return;
+    loadedSessionRef.current = sessionId;
+    setActiveSessionId(sessionId);
+    loadChatHistory(sessionId);
+    router.replace(`/chat?session_id=${encodeURIComponent(sessionId)}`);
   };
 
   const handleRenameSession = async (sessionId: string, newTitle: string) => {
@@ -471,7 +511,10 @@ export default function ChatPage() {
       setCurrentMeeting(targetMeeting);
     }
     const timeParam = typeof startSeconds === 'number' ? `&t=${Math.floor(startSeconds)}` : '';
-    router.push(`/meeting-details?id=${meetingId}${timeParam}`);
+    const sessionParam = activeSessionId
+      ? `&from=chat&session_id=${encodeURIComponent(activeSessionId)}`
+      : '&from=chat';
+    router.push(`/meeting-details?id=${meetingId}${timeParam}${sessionParam}`);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -971,5 +1014,19 @@ export default function ChatPage() {
         sessionTitle={currentSessionRecord?.title}
       />
     </div>
+  );
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-screen items-center justify-center bg-slate-50 dark:bg-zinc-950">
+          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+        </div>
+      }
+    >
+      <ChatPageContent />
+    </Suspense>
   );
 }
