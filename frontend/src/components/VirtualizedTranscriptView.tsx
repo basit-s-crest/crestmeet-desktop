@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useReducer, startTransition, useEffect, useState, memo } from "react";
+import { useCallback, useRef, useReducer, startTransition, useEffect, useState, memo, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useTranscriptStreaming } from "@/hooks/useTranscriptStreaming";
@@ -38,6 +38,8 @@ export interface VirtualizedTranscriptViewProps {
 
     /** Jump to initial citation timestamp */
     initialTimestamp?: number;
+    initialEndTimestamp?: number;
+    highlightQuery?: string;
 }
 
 // Threshold for enabling virtualization (below this, use simple rendering)
@@ -67,6 +69,54 @@ function cleanStopWords(text: string): string {
     return cleanedText.replace(/\s+/g, ' ').trim();
 }
 
+// Helper function to extract search keywords from user query or citation snippet
+function extractKeywords(query?: string): string[] {
+    if (!query) return [];
+    const stopWords = new Set([
+        'what', 'when', 'where', 'which', 'who', 'whom', 'whose', 'why', 'how',
+        'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+        'do', 'does', 'did', 'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because',
+        'as', 'until', 'while', 'of', 'at', 'by', 'for', 'with', 'about', 'against',
+        'between', 'into', 'through', 'during', 'before', 'after', 'above', 'below',
+        'to', 'from', 'up', 'down', 'in', 'out', 'on', 'off', 'over', 'under',
+        'again', 'further', 'then', 'once', 'here', 'there', 'all', 'any', 'both',
+        'each', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not',
+        'only', 'own', 'same', 'so', 'than', 'too', 'very', 'can', 'will', 'just',
+        'should', 'now', 'speaker', 'meeting', 'tell', 'said', 'discuss', 'discussed'
+    ]);
+
+    return query
+        .toLowerCase()
+        .replace(/[^\w\s]/g, ' ')
+        .split(/\s+/)
+        .map(w => w.trim())
+        .filter(term => term.length >= 2 && !stopWords.has(term));
+}
+
+// Helper to highlight matching keywords inside utterance text
+function renderHighlightedText(text: string, terms: string[]) {
+    if (!terms.length) return text;
+    const escaped = terms
+        .filter(t => t.trim().length > 1)
+        .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (!escaped.length) return text;
+    const regex = new RegExp(`(${escaped.join('|')})`, 'gi');
+    const parts = text.split(regex);
+    return parts.map((part, i) => {
+        if (regex.test(part)) {
+            return (
+                <mark
+                    key={i}
+                    className="bg-amber-300/90 dark:bg-amber-400/40 text-amber-950 dark:text-amber-100 font-semibold px-1 py-0.5 rounded shadow-2xs"
+                >
+                    {part}
+                </mark>
+            );
+        }
+        return part;
+    });
+}
+
 // Memoized transcript segment component
 const TranscriptSegment = memo(function TranscriptSegment({
     id,
@@ -76,6 +126,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     isStreaming,
     showConfidence,
     isHighlighted = false,
+    highlightTerms = [],
 }: {
     id: string;
     timestamp: number;
@@ -84,6 +135,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
     isStreaming: boolean;
     showConfidence: boolean;
     isHighlighted?: boolean;
+    highlightTerms?: string[];
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
@@ -130,10 +182,18 @@ const TranscriptSegment = memo(function TranscriptSegment({
                 <div className="flex-1">
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
-                            <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
+                            <p className="text-base text-gray-800 leading-relaxed">
+                                {isHighlighted && highlightTerms.length > 0
+                                    ? renderHighlightedText(displayText, highlightTerms)
+                                    : displayText}
+                            </p>
                         </div>
                     ) : (
-                        <p className="text-base text-gray-800 leading-relaxed">{displayText}</p>
+                        <p className="text-base text-gray-800 leading-relaxed">
+                            {isHighlighted && highlightTerms.length > 0
+                                ? renderHighlightedText(displayText, highlightTerms)
+                                : displayText}
+                        </p>
                     )}
                 </div>
             </div>
@@ -156,6 +216,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     loadedCount = 0,
     onLoadMore,
     initialTimestamp,
+    initialEndTimestamp,
+    highlightQuery,
 }) => {
     // Create scroll ref first - shared between virtualizer and auto-scroll hook
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -220,6 +282,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         enableStreaming
     );
 
+    // Extract keywords from highlightQuery
+    const highlightTerms = useMemo(() => {
+        return extractKeywords(highlightQuery);
+    }, [highlightQuery]);
+
     // Handle deep-link initial timestamp navigation & highlighting
     useEffect(() => {
         if (typeof initialTimestamp !== 'number' || segments.length === 0 || hasScrolledInitialRef.current) {
@@ -228,12 +295,80 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 
         hasScrolledInitialRef.current = true;
 
-        // Find exact or closest segment
-        let targetIndex = segments.findIndex((seg) => {
-            const start = seg.timestamp ?? 0;
-            const end = seg.endTime ?? (start + 15);
-            return initialTimestamp >= start && initialTimestamp <= end;
-        });
+        let targetIndex = -1;
+
+        // 1. If we have search terms, search for the best matching utterance inside/around the chunk window
+        if (highlightTerms.length > 0) {
+            const windowStart = Math.max(0, initialTimestamp - 15);
+            const windowEnd = (typeof initialEndTimestamp === 'number' && initialEndTimestamp > initialTimestamp)
+                ? initialEndTimestamp + 20
+                : initialTimestamp + 180;
+
+            let bestScore = 0;
+            let bestIndexInWindow = -1;
+
+            segments.forEach((seg, idx) => {
+                const t = seg.timestamp ?? 0;
+                if (t >= windowStart && t <= windowEnd) {
+                    const segTextLower = seg.text.toLowerCase();
+                    let score = 0;
+
+                    // Exact phrase match
+                    if (highlightQuery && segTextLower.includes(highlightQuery.toLowerCase().trim())) {
+                        score += 100;
+                    }
+
+                    // Keyword matches
+                    for (const term of highlightTerms) {
+                        if (segTextLower.includes(term)) {
+                            score += term.length >= 4 ? 30 : 15;
+                        }
+                    }
+
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestIndexInWindow = idx;
+                    }
+                }
+            });
+
+            if (bestIndexInWindow !== -1 && bestScore > 0) {
+                targetIndex = bestIndexInWindow;
+            } else {
+                // If not found in chunk window, search all segments across the entire meeting
+                let bestGlobalScore = 0;
+                let bestGlobalIndex = -1;
+                segments.forEach((seg, idx) => {
+                    const segTextLower = seg.text.toLowerCase();
+                    let score = 0;
+                    if (highlightQuery && segTextLower.includes(highlightQuery.toLowerCase().trim())) {
+                        score += 100;
+                    }
+                    for (const term of highlightTerms) {
+                        if (segTextLower.includes(term)) {
+                            score += term.length >= 4 ? 30 : 15;
+                        }
+                    }
+                    if (score > bestGlobalScore) {
+                        bestGlobalScore = score;
+                        bestGlobalIndex = idx;
+                    }
+                });
+
+                if (bestGlobalIndex !== -1 && bestGlobalScore > 0) {
+                    targetIndex = bestGlobalIndex;
+                }
+            }
+        }
+
+        // 2. Fallback: closest segment to initialTimestamp
+        if (targetIndex === -1) {
+            targetIndex = segments.findIndex((seg) => {
+                const start = seg.timestamp ?? 0;
+                const end = seg.endTime ?? (start + 15);
+                return initialTimestamp >= start && initialTimestamp <= end;
+            });
+        }
 
         if (targetIndex === -1) {
             targetIndex = segments.reduce((bestIdx, seg, idx) => {
@@ -247,6 +382,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         if (matchedSegment) {
             setHighlightedSegmentId(matchedSegment.id);
 
+            // Seek video directly to the matched utterance timestamp!
+            const seekTime = matchedSegment.timestamp ?? initialTimestamp;
+
             const timer = setTimeout(() => {
                 if (segments.length >= VIRTUALIZATION_THRESHOLD && virtualizer) {
                     virtualizer.scrollToIndex(targetIndex, { align: 'center', behavior: 'smooth' });
@@ -256,21 +394,21 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 }
 
                 if (typeof window !== 'undefined') {
-                    window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: initialTimestamp } }));
+                    window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: seekTime } }));
                 }
             }, 200);
 
-            // Clear pulse highlight after 4 seconds
+            // Clear pulse highlight after 6 seconds
             const clearTimer = setTimeout(() => {
                 setHighlightedSegmentId(null);
-            }, 4500);
+            }, 6000);
 
             return () => {
                 clearTimeout(timer);
                 clearTimeout(clearTimer);
             };
         }
-    }, [initialTimestamp, segments, virtualizer]);
+    }, [initialTimestamp, initialEndTimestamp, highlightTerms, highlightQuery, segments, virtualizer]);
 
     // Infinite scroll: IntersectionObserver to trigger loading more
     useEffect(() => {
@@ -415,6 +553,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                         isHighlighted={highlightedSegmentId === segment.id}
+                                        highlightTerms={highlightedSegmentId === segment.id ? highlightTerms : []}
                                     />
                                 </div>
                             );
@@ -472,6 +611,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         isStreaming={isStreaming}
                                         showConfidence={showConfidence}
                                         isHighlighted={highlightedSegmentId === segment.id}
+                                        highlightTerms={highlightedSegmentId === segment.id ? highlightTerms : []}
                                     />
                                 </motion.div>
                             );

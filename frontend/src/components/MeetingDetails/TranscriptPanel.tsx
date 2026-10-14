@@ -45,8 +45,10 @@ interface TranscriptPanelProps {
   // Resizable width in pixels
   width?: number;
 
-  // Jump to citation timestamp
+  // Jump to citation timestamp & highlight matching text
   initialTimestamp?: number;
+  initialEndTimestamp?: number;
+  highlightQuery?: string;
 }
 
 export function TranscriptPanel({
@@ -76,6 +78,8 @@ export function TranscriptPanel({
   uploadStatus,
   width,
   initialTimestamp,
+  initialEndTimestamp,
+  highlightQuery,
 }: TranscriptPanelProps) {
   // Convert transcripts to segments if pagination is not used but we want virtualization
   const convertedSegments = useMemo(() => {
@@ -219,6 +223,8 @@ export function TranscriptPanel({
           loadedCount={loadedCount}
           onLoadMore={onLoadMore}
           initialTimestamp={initialTimestamp}
+          initialEndTimestamp={initialEndTimestamp}
+          highlightQuery={highlightQuery}
         />
       </div>
 

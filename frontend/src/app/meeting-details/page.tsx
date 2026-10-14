@@ -423,6 +423,9 @@ function MeetingDetailsContent() {
 
   const targetTimeStr = searchParams.get('t');
   const initialTimestamp = targetTimeStr ? parseFloat(targetTimeStr) : undefined;
+  const targetEndTimeStr = searchParams.get('end');
+  const initialEndTimestamp = targetEndTimeStr ? parseFloat(targetEndTimeStr) : undefined;
+  const highlightQuery = searchParams.get('q') || undefined;
 
   return <PageContent
     meeting={meetingDetails}
@@ -430,6 +433,8 @@ function MeetingDetailsContent() {
     shouldAutoGenerate={shouldAutoGenerate}
     onAutoGenerateComplete={() => setShouldAutoGenerate(false)}
     initialTimestamp={initialTimestamp}
+    initialEndTimestamp={initialEndTimestamp}
+    highlightQuery={highlightQuery}
     onMeetingUpdated={async () => {
       // Refetch meeting details to get updated title from backend
       await fetchMeetingDetails();

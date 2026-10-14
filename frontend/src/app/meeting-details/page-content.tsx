@@ -28,6 +28,8 @@ export default function PageContent({
   shouldAutoGenerate = false,
   onAutoGenerateComplete,
   initialTimestamp,
+  initialEndTimestamp,
+  highlightQuery,
   onMeetingUpdated,
   onRefetchTranscripts,
   // Pagination props for efficient transcript loading
@@ -43,6 +45,8 @@ export default function PageContent({
   shouldAutoGenerate?: boolean;
   onAutoGenerateComplete?: () => void;
   initialTimestamp?: number;
+  initialEndTimestamp?: number;
+  highlightQuery?: string;
   onMeetingUpdated?: () => Promise<void>;
   onRefetchTranscripts?: () => Promise<void>;
   // Pagination props
@@ -341,6 +345,8 @@ export default function PageContent({
           uploadStatus={(meeting as any).upload_status}
           width={transcriptWidth}
           initialTimestamp={initialTimestamp}
+          initialEndTimestamp={initialEndTimestamp}
+          highlightQuery={highlightQuery}
         />
 
         {/* Draggable Divider Handle - slim 1px line with comfortable hit area */}

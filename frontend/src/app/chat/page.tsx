@@ -505,16 +505,28 @@ function ChatPageContent() {
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
-  const navigateToMeeting = (meetingId: string, startSeconds?: number) => {
+  const navigateToMeeting = (
+    meetingId: string,
+    startSeconds?: number,
+    endSeconds?: number,
+    snippet?: string,
+    queryText?: string
+  ) => {
     const targetMeeting = meetings.find((m) => m.id === meetingId);
     if (targetMeeting) {
       setCurrentMeeting(targetMeeting);
     }
     const timeParam = typeof startSeconds === 'number' ? `&t=${Math.floor(startSeconds)}` : '';
+    const endParam = typeof endSeconds === 'number' ? `&end=${Math.floor(endSeconds)}` : '';
     const sessionParam = activeSessionId
       ? `&from=chat&session_id=${encodeURIComponent(activeSessionId)}`
       : '&from=chat';
-    router.push(`/meeting-details?id=${meetingId}${timeParam}${sessionParam}`);
+
+    // Prioritize user query keywords or snippet excerpt
+    const rawSearch = (queryText || snippet || '').trim();
+    const queryParam = rawSearch ? `&q=${encodeURIComponent(rawSearch.slice(0, 150))}` : '';
+
+    router.push(`/meeting-details?id=${meetingId}${timeParam}${endParam}${queryParam}${sessionParam}`);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -807,7 +819,7 @@ function ChatPageContent() {
             </div>
           ) : (
             <div className="max-w-3xl mx-auto space-y-5 pb-6">
-              {messages.map((message) => {
+              {messages.map((message, mIdx) => {
                 const isUser = message.role === 'user';
 
                 return (
@@ -911,7 +923,20 @@ function ChatPageContent() {
                                   return (
                                     <button
                                       key={cIdx}
-                                      onClick={() => navigateToMeeting(cite.meetingId, cite.startSeconds)}
+                                      onClick={() => {
+                                        const priorUserMsg = messages
+                                          .slice(0, mIdx)
+                                          .reverse()
+                                          .find((m) => m.role === 'user');
+                                        const queryContext = priorUserMsg?.content || inputQuery || '';
+                                        navigateToMeeting(
+                                          cite.meetingId,
+                                          cite.startSeconds,
+                                          cite.endSeconds,
+                                          cite.snippet,
+                                          queryContext
+                                        );
+                                      }}
                                       title={cite.snippet ? `"${cite.snippet}"` : `Jump to ${cite.meetingTitle}`}
                                       className="group/cite flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-slate-50 dark:bg-zinc-800/90 text-slate-700 dark:text-zinc-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-600 dark:hover:text-indigo-400 border border-slate-200/90 dark:border-zinc-700 hover:border-indigo-200 dark:hover:border-indigo-800 transition-all cursor-pointer shadow-2xs"
                                     >
