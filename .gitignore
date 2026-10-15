@@ -5,6 +5,8 @@
 # dependencies
 /node_modules
 **/models
+!services/rag_service/src/crestmeet_rag/models/
+!services/rag_service/src/crestmeet_rag/models/**
 /.pnp
 .pnp.*
 .yarn/*
@@ -13,6 +15,12 @@
 !.yarn/releases
 !.yarn/versions
 *.mp4
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
 
 # testing
 /coverage
