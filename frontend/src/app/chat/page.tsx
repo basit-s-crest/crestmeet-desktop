@@ -250,7 +250,7 @@ function ChatPageContent() {
     loadedSessionRef.current = draftId;
     setActiveSessionId(draftId);
     setMessages([]);
-    router.replace('/chat');
+    window.history.replaceState(null, '', '/chat');
   };
 
   const handleNewChat = () => {
@@ -302,7 +302,10 @@ function ChatPageContent() {
 
   // When urlSessionId changes (e.g. navigating back from citation)
   useEffect(() => {
-    if (urlSessionId && urlSessionId !== loadedSessionRef.current) {
+    if (urlSessionId && urlSessionId !== loadedSessionRef.current && urlSessionId !== activeSessionId) {
+      if (loadedSessionRef.current?.startsWith('draft-')) {
+        return; // Intentionally on a new chat draft - do not reload old session
+      }
       loadedSessionRef.current = urlSessionId;
       setActiveSessionId(urlSessionId);
       loadChatHistory(urlSessionId);
@@ -312,10 +315,8 @@ function ChatPageContent() {
       } else {
         setSelectedProjectIds(null);
       }
-    } else if (!urlSessionId && loadedSessionRef.current && !loadedSessionRef.current.startsWith('draft-')) {
-      startNewChatDraft();
     }
-  }, [urlSessionId, sessions]);
+  }, [urlSessionId, activeSessionId]);
 
   // Listen for sidebar new chat button event
   useEffect(() => {
@@ -326,7 +327,7 @@ function ChatPageContent() {
     return () => {
       window.removeEventListener('crestmeet_new_chat', handleNewChatEvent);
     };
-  }, [selectedProjectIds]);
+  }, [handleNewChat]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -338,7 +339,7 @@ function ChatPageContent() {
     loadedSessionRef.current = sessionId;
     setActiveSessionId(sessionId);
     loadChatHistory(sessionId);
-    router.replace(`/chat?session_id=${encodeURIComponent(sessionId)}`);
+    window.history.replaceState(null, '', `/chat?session_id=${encodeURIComponent(sessionId)}`);
     const session = sessions.find((s) => s.id === sessionId);
     if (session && session.scopeProjectIds && session.scopeProjectIds.length > 0) {
       setSelectedProjectIds(session.scopeProjectIds);
@@ -376,12 +377,7 @@ function ChatPageContent() {
       await invoke('api_chat_archive_session', { sessionId, archive });
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       if (activeSessionId === sessionId) {
-        const remaining = sessions.filter((s) => s.id !== sessionId);
-        if (remaining.length > 0) {
-          handleSelectSession(remaining[0].id);
-        } else {
-          handleNewChat();
-        }
+        startNewChatDraft();
       }
       toast.success(archive ? 'Conversation archived' : 'Conversation unarchived');
     } catch (err: any) {
@@ -394,12 +390,7 @@ function ChatPageContent() {
       await invoke('api_chat_delete_session', { sessionId });
       setSessions((prev) => prev.filter((s) => s.id !== sessionId));
       if (activeSessionId === sessionId) {
-        const remaining = sessions.filter((s) => s.id !== sessionId);
-        if (remaining.length > 0) {
-          handleSelectSession(remaining[0].id);
-        } else {
-          handleNewChat();
-        }
+        startNewChatDraft();
       }
       toast.success('Conversation deleted');
     } catch (err: any) {
@@ -440,7 +431,6 @@ function ChatPageContent() {
           { ...createdSession, messageCount: 2 },
           ...prev.filter((s) => s.id !== createdSession.id && (s.messageCount || 0) > 0),
         ]);
-        router.replace(`/chat?session_id=${encodeURIComponent(createdSession.id)}`);
       } catch (err: any) {
         console.warn('Could not create DB session on first message:', err);
         toast.error('Failed to initialize chat session: ' + (err?.message || err));
@@ -507,6 +497,7 @@ function ChatPageContent() {
             )
           );
           setIsLoading(false);
+          window.history.replaceState(null, '', `/chat?session_id=${encodeURIComponent(targetSessionId)}`);
         } else if (event.type === 'error') {
           toast.error(event.error);
           setMessages((prev) =>
@@ -578,6 +569,7 @@ function ChatPageContent() {
               : m
           )
         );
+        window.history.replaceState(null, '', `/chat?session_id=${encodeURIComponent(targetSessionId)}`);
       } catch (err: any) {
         const errorMessage = typeof err === 'string' ? err : err?.message || 'Failed to query meetings';
         toast.error(errorMessage);
