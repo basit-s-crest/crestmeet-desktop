@@ -245,26 +245,20 @@ function ChatPageContent() {
     }
   };
 
-  const handleNewChat = async () => {
-    try {
-      const scopeIds = selectedProjectIds && selectedProjectIds.length > 0 ? selectedProjectIds : undefined;
-      const newSession = await invoke<ChatSessionRecord>('api_chat_create_session', {
-        scopeProjectIds: scopeIds,
-        title: 'New Conversation',
-      });
+  const startNewChatDraft = () => {
+    const draftId = `draft-${Date.now()}`;
+    loadedSessionRef.current = draftId;
+    setActiveSessionId(draftId);
+    setMessages([]);
+    router.replace('/chat');
+  };
 
-      setSessions((prev) => [newSession, ...prev]);
-      loadedSessionRef.current = newSession.id;
-      setActiveSessionId(newSession.id);
-      setMessages([]);
-      router.replace('/chat');
-    } catch (err: any) {
-      const fallbackId = `session-${Date.now()}`;
-      loadedSessionRef.current = fallbackId;
-      setActiveSessionId(fallbackId);
-      setMessages([]);
-      router.replace('/chat');
+  const handleNewChat = () => {
+    // If currently already on an empty draft, do nothing
+    if (messages.length === 0 && (!activeSessionId || activeSessionId.startsWith('draft-'))) {
+      return;
     }
+    startNewChatDraft();
   };
 
   const loadSessions = async (targetSessionId?: string | null) => {
@@ -273,37 +267,29 @@ function ChatPageContent() {
       const list = await invoke<ChatSessionRecord[]>('api_chat_list_sessions', {
         includeArchived: false,
       });
-      setSessions(list);
+      // In sidebar history, only show real conversations that have messages!
+      const validSessions = list.filter((s) => s.messageCount > 0);
+      setSessions(validSessions);
 
       if (targetSessionId) {
-        // Return to specific session requested in URL (e.g. Back from Meeting Details)
+        // Return to specific session requested in URL (e.g. Back to Chat from Meeting Details, or clicking a chat link)
         loadedSessionRef.current = targetSessionId;
         setActiveSessionId(targetSessionId);
         loadChatHistory(targetSessionId);
-        const match = list.find((s) => s.id === targetSessionId);
+        const match = validSessions.find((s) => s.id === targetSessionId);
         if (match && match.scopeProjectIds && match.scopeProjectIds.length > 0) {
           setSelectedProjectIds(match.scopeProjectIds);
         } else {
           setSelectedProjectIds(null);
         }
       } else {
-        // New chat requested: start with clean slate
-        // If the top session is already empty and unused, reuse it
-        if (list.length > 0 && list[0].messageCount === 0) {
-          loadedSessionRef.current = list[0].id;
-          setActiveSessionId(list[0].id);
-          setMessages([]);
-          if (list[0].scopeProjectIds && list[0].scopeProjectIds.length > 0) {
-            setSelectedProjectIds(list[0].scopeProjectIds);
-          } else {
-            setSelectedProjectIds(null);
-          }
-        } else {
-          await handleNewChat();
-        }
+        // User clicked chatbot icon (or routed from home/projects to /chat):
+        // Always show a fresh, empty new chat screen without saving any empty session to DB!
+        startNewChatDraft();
       }
     } catch (err) {
       console.warn('Could not load sessions:', err);
+      startNewChatDraft();
     } finally {
       setIsSessionsLoading(false);
     }
@@ -326,6 +312,8 @@ function ChatPageContent() {
       } else {
         setSelectedProjectIds(null);
       }
+    } else if (!urlSessionId && loadedSessionRef.current && !loadedSessionRef.current.startsWith('draft-')) {
+      startNewChatDraft();
     }
   }, [urlSessionId, sessions]);
 
@@ -432,7 +420,35 @@ function ChatPageContent() {
 
   const handleSendMessage = async (textToSend?: string) => {
     const query = (textToSend || inputQuery).trim();
-    if (!query || isLoading || !activeSessionId) return;
+    if (!query || isLoading) return;
+
+    let targetSessionId = activeSessionId;
+
+    // If currently on a draft (or no valid persisted session), lazily create session now in DB
+    if (!targetSessionId || targetSessionId.startsWith('draft-') || !sessions.some((s) => s.id === targetSessionId)) {
+      try {
+        const scopeIds = selectedProjectIds && selectedProjectIds.length > 0 ? selectedProjectIds : undefined;
+        const autoTitle = query.slice(0, 32) + (query.length > 32 ? '...' : '');
+        const createdSession = await invoke<ChatSessionRecord>('api_chat_create_session', {
+          scopeProjectIds: scopeIds,
+          title: autoTitle,
+        });
+        targetSessionId = createdSession.id;
+        loadedSessionRef.current = createdSession.id;
+        setActiveSessionId(createdSession.id);
+        setSessions((prev) => [
+          { ...createdSession, messageCount: 2 },
+          ...prev.filter((s) => s.id !== createdSession.id && (s.messageCount || 0) > 0),
+        ]);
+        router.replace(`/chat?session_id=${encodeURIComponent(createdSession.id)}`);
+      } catch (err: any) {
+        console.warn('Could not create DB session on first message:', err);
+        toast.error('Failed to initialize chat session: ' + (err?.message || err));
+        return;
+      }
+    }
+
+    if (!targetSessionId) return;
 
     const userMessage: ChatMessage = {
       id: `usr-${Date.now()}`,
@@ -509,25 +525,43 @@ function ChatPageContent() {
 
       await invoke('api_chat_send_message_stream', {
         query,
-        chatSessionId: activeSessionId,
+        chatSessionId: targetSessionId,
         projectIds: selectedProjectIds,
         onEvent: channel,
       });
 
+      // Mark session as having messages in local state
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id === targetSessionId
+            ? { ...s, messageCount: (s.messageCount || 0) + 2 }
+            : s
+        )
+      );
+
       // Auto-rename from first question if session is still 'New Conversation'
-      const activeSession = sessions.find((s) => s.id === activeSessionId);
+      const activeSession = sessions.find((s) => s.id === targetSessionId);
       if (activeSession && activeSession.title === 'New Conversation') {
         const autoTitle = query.slice(0, 32) + (query.length > 32 ? '...' : '');
-        handleRenameSession(activeSessionId, autoTitle);
+        handleRenameSession(targetSessionId, autoTitle);
       }
     } catch (streamErr: any) {
       console.warn('Streaming invocation fallback to non-streaming:', streamErr);
       try {
         const response = await invoke<ChatApiResponse>('api_chat_send_message', {
           query,
-          chatSessionId: activeSessionId,
+          chatSessionId: targetSessionId,
           projectIds: selectedProjectIds,
         });
+
+        // Mark session as having messages in local state
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === targetSessionId
+              ? { ...s, messageCount: (s.messageCount || 0) + 2 }
+              : s
+          )
+        );
 
         setMessages((prev) =>
           prev.map((m) =>

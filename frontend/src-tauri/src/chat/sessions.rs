@@ -39,12 +39,20 @@ pub struct ChatMessageDetail {
 pub struct ChatSessionRepository;
 
 impl ChatSessionRepository {
-    /// List sessions for the authenticated user
+    /// List sessions for the authenticated user (only sessions with messages)
     pub async fn list_sessions(
         pool: &PgPool,
         user_id: Uuid,
         include_archived: bool,
     ) -> Result<Vec<ChatSessionRecord>, String> {
+        // Automatically delete any empty sessions (message_count = 0) so database stays clean
+        let _ = sqlx::query(
+            "DELETE FROM chat_sessions WHERE user_id = $1 AND message_count = 0"
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await;
+
         let rows = sqlx::query_as::<
             _,
             (
@@ -67,6 +75,7 @@ impl ChatSessionRepository {
             FROM chat_sessions
             WHERE user_id = $1 AND deleted_at IS NULL
               AND ($2 = true OR archived_at IS NULL)
+              AND message_count > 0
             ORDER BY pinned DESC, last_message_at DESC
             LIMIT 50
             "#,

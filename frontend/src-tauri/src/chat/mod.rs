@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::State;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::database::repositories::setting::SettingsRepository;
@@ -191,82 +191,71 @@ async fn fetch_query_embedding_local(query: &str) -> Option<String> {
     }
 }
 
-/// Detect general / cross-meeting overview questions (e.g. pending action items, recent decisions, deadlines, cross-meeting overview)
-fn is_general_overview_query(query: &str) -> bool {
+/// Detect if a query is purely generic overview/status (Path A) vs specific search (Path B)
+/// Uses entity subtraction: if ANY substantive topic, entity, feature or person name is present,
+/// this immediately returns false -> routes to Path B (Specific Search).
+fn is_purely_generic_query(query: &str) -> bool {
     let q = query.trim().to_lowercase();
 
-    let general_phrases = [
-        "pending action item",
-        "pending action items",
-        "action items",
-        "action item",
-        "key decisions",
-        "key decision",
-        "recent key decisions",
-        "project deadlines",
-        "deadlines and milestones",
-        "deadlines & timelines",
-        "deadlines and timelines",
-        "cross-meeting overview",
-        "cross meeting overview",
-        "cross-meeting",
-        "cross meeting",
-        "across meetings",
-        "all meetings",
-        "recent meetings",
-        "latest meetings",
-        "recent meeting",
-        "latest meeting",
-        "last meeting",
-        "last meetings",
-        "last 5 meetings",
-        "latest 5 meetings",
-        "past meetings",
-        "what was discussed recently",
-        "what did we discuss recently",
-        "what did we discuss in our meetings",
-        "summarize recent",
-        "summarize latest",
-        "overview of all discussions",
-        "overview of recent",
-        "summary of recent",
-        "summary of latest",
-        "weekly progress",
-        "themes, blockers",
-        "who is responsible for each",
-        "assigned tasks",
-        "scheduled targets",
-        "milestones, release dates",
-    ];
+    // Remove punctuation to isolate tokens
+    let cleaned: String = q
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c.is_whitespace() { c } else { ' ' })
+        .collect();
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
 
-    for phrase in &general_phrases {
-        if q.contains(phrase) {
-            return true;
-        }
+    // Universal stop words, meta question words, and generic meeting status nouns
+    let stop_words: std::collections::HashSet<&str> = [
+        "what", "whats", "what's", "are", "is", "were", "was", "all", "the", "a", "an",
+        "my", "our", "your", "their", "any", "some", "pending", "action", "item", "items",
+        "task", "tasks", "assigned", "who", "responsible", "for", "each", "key",
+        "decision", "decisions", "recent", "recently", "latest", "last", "few", "past",
+        "meeting", "meetings", "call", "calls", "discussion", "discussions", "summarize",
+        "summary", "give", "me", "an", "overview", "of", "and", "in", "progress",
+        "blockers", "updates", "update", "milestones", "milestone", "deadlines", "deadline",
+        "timeline", "timelines", "scheduled", "targets", "target", "cross", "themes",
+        "theme", "recap", "takeaways", "takeaway", "highlights", "highlight", "weekly",
+        "today", "yesterday", "we", "did", "have", "tell", "about", "show", "list",
+        "notes", "note", "status", "report", "brief", "agenda", "minutes", "from", "to",
+        "with", "on", "at", "by", "do", "done", "does", "get", "got", "can", "could",
+        "would", "should", "there", "here", "work", "going", "decide", "decided",
+        "discuss", "discussed", "talking", "talk", "talked", "mentioned"
+    ]
+    .iter()
+    .cloned()
+    .collect();
+
+    // Check if any specific domain/topic words remain
+    let remaining_substantive: Vec<&str> = words
+        .into_iter()
+        .filter(|w| !stop_words.contains(w) && w.len() > 2)
+        .collect();
+
+    // If substantive words remain (e.g. "pricing", "auth", "alex", "stripe", "database"),
+    // then this is NOT purely generic -> Route to Path B (Specific Search)!
+    if !remaining_substantive.is_empty() {
+        return false;
     }
 
-    let has_overview = q.contains("overview")
-        || q.contains("summarize")
-        || q.contains("summary")
+    // Check if query contains any overview/action/decision intent keywords
+    let has_overview_intent = q.contains("action")
+        || q.contains("task")
+        || q.contains("decision")
+        || q.contains("deadline")
+        || q.contains("milestone")
+        || q.contains("overview")
+        || q.contains("summar")
         || q.contains("recap")
         || q.contains("progress")
-        || q.contains("updates")
-        || q.contains("takeaways")
-        || q.contains("highlights");
-
-    let has_general_scope = q.contains("meetings")
+        || q.contains("update")
+        || q.contains("takeaway")
+        || q.contains("highlight")
         || q.contains("meeting")
-        || q.contains("calls")
-        || q.contains("discussions")
-        || q.contains("latest")
-        || q.contains("recent");
+        || q.contains("discuss");
 
-    if has_overview && has_general_scope {
-        return true;
-    }
-
-    false
+    has_overview_intent
 }
+
 
 #[derive(Debug, Clone)]
 pub struct ScopedMeetingItem {
@@ -329,6 +318,7 @@ async fn fetch_latest_meetings_for_scope(
 async fn fetch_representative_chunks_for_meetings(
     pool: &PgPool,
     meeting_ids: &[String],
+    chunks_per_meeting: i64,
 ) -> Vec<RetrievedKnowledgeChunk> {
     if meeting_ids.is_empty() {
         return Vec::new();
@@ -379,11 +369,12 @@ async fn fetch_representative_chunks_for_meetings(
         SELECT chunk_id, project_id, project_name, meeting_id, meeting_title, meeting_date,
                source_type, content, speakers, start_seconds, end_seconds, chunk_index
         FROM ranked_chunks
-        WHERE rn <= 3
+        WHERE rn <= $2
         ORDER BY meeting_date DESC, rn ASC
         "#,
     )
     .bind(meeting_ids)
+    .bind(chunks_per_meeting)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -482,6 +473,7 @@ async fn fetch_scoped_insights(
     project_ids: Option<&[Uuid]>,
     user_id: Option<Uuid>,
     meeting_ids: Option<&[String]>,
+    limit: i64,
 ) -> Vec<RetrievedInsight> {
     let rows = sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
         r#"
@@ -492,12 +484,13 @@ async fn fetch_scoped_insights(
           AND ($2::uuid IS NULL OR m.user_id = $2)
           AND ($3::text[] IS NULL OR mi.meeting_id = ANY($3))
         ORDER BY m.created_at DESC, mi.created_at DESC
-        LIMIT 30
+        LIMIT $4
         "#,
     )
     .bind(project_ids)
     .bind(user_id)
     .bind(meeting_ids)
+    .bind(limit)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -626,7 +619,7 @@ async fn load_conversation_memory(
         .map(|(_, content)| content.clone());
 
     let recent_len = msg_rows.len();
-    let start_idx = if recent_len > 6 { recent_len - 6 } else { 0 };
+    let start_idx = if recent_len > 4 { recent_len - 4 } else { 0 };
     let recent_turns: Vec<(String, String)> = msg_rows[start_idx..]
         .iter()
         .map(|(role, content)| {
@@ -647,29 +640,30 @@ async fn load_conversation_memory(
     }
 }
 
-/// Rewrite conversational follow-up query into a standalone search query
-async fn rewrite_query_for_search(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryIntent {
+    GeneralOverview,
+    SpecificSearch,
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryAnalysis {
+    pub intent: QueryIntent,
+    pub search_query: String,
+}
+
+/// Intelligently classify query intent and rewrite follow-up queries using Groq in a single fast call
+async fn analyze_and_rewrite_query(
     api_key: &str,
     model_name: &str,
     query: &str,
     memory: &ConversationMemory,
-) -> String {
-    if memory.recent_turns.is_empty() {
-        return query.to_string();
-    }
-
-    let q_lower = query.to_lowercase();
-    let has_reference = q_lower.split_whitespace().any(|w| {
-        matches!(
-            w.trim_matches(|c: char| !c.is_alphanumeric()),
-            "it" | "this" | "that" | "they" | "he" | "she" | "them" | "these" | "those" |
-            "what" | "who" | "when" | "why" | "where" | "how" | "more" | "further" | "again" | "same"
-        )
-    }) || query.split_whitespace().count() <= 8;
-
-    if !has_reference {
-        return query.to_string();
-    }
+) -> QueryAnalysis {
+    let fallback_intent = if is_purely_generic_query(query) {
+        QueryIntent::GeneralOverview
+    } else {
+        QueryIntent::SpecificSearch
+    };
 
     let mut recent_snippet = String::new();
     let len = memory.recent_turns.len();
@@ -680,31 +674,75 @@ async fn rewrite_query_for_search(
         recent_snippet.push_str(&format!("{}: {}\n", prefix, excerpt));
     }
 
-    let rewrite_prompt = format!(
-        "Given the recent conversation history:\n{}\n\nUser's follow-up question: \"{}\"\n\nRewrite this follow-up question into a single clear, standalone search query that preserves the entities and context from the conversation. Return ONLY the rewritten query text, with no quotes or additional explanation.",
-        recent_snippet,
+    let prompt = format!(
+        r#"Analyze this meeting chatbot question and output ONLY a valid JSON object.
+
+Recent Conversation History:
+{}
+
+User Question: "{}"
+
+Task:
+1. Determine "intent":
+   - "general_overview": The user is asking a broad, cross-meeting status question with NO specific entity or project (e.g. "What are my pending action items?", "Summarize recent meetings", "What are our recent key decisions?", "Cross-meeting overview", "Recent updates").
+   - "specific_search": The user is asking about a specific topic, feature, entity, meeting, or person (e.g. "What did we decide about pricing?", "Postgres migration blockers", "Who worked on auth?"), OR asking a follow-up that refers to a specific entity from conversation history (e.g. "What are the tasks for it?").
+
+2. Provide "search_query":
+   - If specific_search: Rewrite into a standalone keyword/semantic search query resolving any pronouns or conversational references.
+   - If general_overview: Keep the core query concise.
+
+Output ONLY this raw JSON format (no markdown, no quotes around JSON):
+{{"intent": "general_overview" | "specific_search", "search_query": "..."}}"#,
+        if recent_snippet.is_empty() { "(No prior conversation)" } else { &recent_snippet },
         query
     );
 
-    let rewritten = call_groq_synthesize(
+    let res = call_groq_synthesize(
         api_key,
         model_name,
-        "You are an expert search query rewriter. Return only the rewritten search query.",
-        &rewrite_prompt,
+        "You are an expert search classifier and query rewriter. Output ONLY raw JSON.",
+        &prompt,
     )
     .await;
 
-    match rewritten {
-        Ok(res) => {
-            let trimmed = res.trim().trim_matches('"').trim().to_string();
-            if !trimmed.is_empty() && trimmed.len() < 300 {
-                info!("Rewrote follow-up query '{}' -> '{}'", query, trimmed);
-                trimmed
-            } else {
-                query.to_string()
-            }
+    if let Ok(raw_json) = res {
+        let clean = raw_json
+            .trim()
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim();
+
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(clean) {
+            let intent = match val.get("intent").and_then(|i| i.as_str()) {
+                Some("general_overview") => QueryIntent::GeneralOverview,
+                Some("specific_search") => QueryIntent::SpecificSearch,
+                _ => fallback_intent.clone(),
+            };
+            let search_query = val
+                .get("search_query")
+                .and_then(|s| s.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(query)
+                .to_string();
+
+            info!(
+                "[Chatbot Router LLM] Intent: {:?}, Search Query: '{}'",
+                intent, search_query
+            );
+
+            return QueryAnalysis {
+                intent,
+                search_query,
+            };
         }
-        Err(_) => query.to_string(),
+    }
+
+    // Fallback if LLM call fails
+    info!("[Chatbot Router] Fallback to code logic: {:?}", fallback_intent);
+    QueryAnalysis {
+        intent: fallback_intent,
+        search_query: query.to_string(),
     }
 }
 
@@ -952,13 +990,33 @@ where
         "stream": true
     });
 
-    let res = client
-        .post("https://api.groq.com/openai/v1/chat/completions")
-        .headers(headers)
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Network request to Groq failed: {}", e))?;
+    let res = {
+        let first_res = client
+            .post("https://api.groq.com/openai/v1/chat/completions")
+            .headers(headers.clone())
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| format!("Network request to Groq failed: {}", e))?;
+
+        if first_res.status().as_u16() == 429 && model_name != "llama-3.3-70b-versatile" {
+            warn!(
+                "Groq rate limit (429) hit on model '{}'. Retrying seamlessly with 'llama-3.3-70b-versatile'...",
+                model_name
+            );
+            let mut retry_payload = payload.clone();
+            retry_payload["model"] = json!("llama-3.3-70b-versatile");
+            client
+                .post("https://api.groq.com/openai/v1/chat/completions")
+                .headers(headers)
+                .json(&retry_payload)
+                .send()
+                .await
+                .map_err(|e| format!("Fallback network request to Groq failed: {}", e))?
+        } else {
+            first_res
+        }
+    };
 
     if !res.status().is_success() {
         let err_text = res.text().await.unwrap_or_else(|_| "Unknown error".to_string());
@@ -1112,83 +1170,76 @@ pub async fn api_chat_send_message_stream(
 
     let memory = load_conversation_memory(&pool, &chat_session_id, current_user).await;
 
-    // Step 4: Check if this is a general/cross-meeting/overview question
-    let is_general_query = is_general_overview_query(&q) || is_general_overview_query(&cleaned_user_query);
-    let latest_scoped_meetings = if is_general_query {
-        fetch_latest_meetings_for_scope(&pool, current_user, project_scope.as_deref(), 5).await
-    } else {
-        Vec::new()
-    };
+    // Step 4: Intelligent Query Analysis & Routing (Intent + Search Query in a single fast call)
+    let query_to_analyze = if cleaned_user_query.is_empty() { &q } else { &cleaned_user_query };
+    let analysis = analyze_and_rewrite_query(&api_key, target_model, query_to_analyze, &memory).await;
 
-    if is_general_query && latest_scoped_meetings.is_empty() {
-        let no_meetings_msg = "You don't have any recorded meetings in your accessible project scope yet. Once you record or import meetings, I can analyze action items, decisions, and summaries for you!".to_string();
-        let _ = on_event.send(ChatStreamEvent::Token { token: no_meetings_msg.clone() });
-        let _ = on_event.send(ChatStreamEvent::Done {
-            answer: no_meetings_msg.clone(),
-            citations: Vec::new(),
-            relevancy_score: 0.0,
-            relevancy_label: "No Meetings Found".to_string(),
-            is_fallback: true,
-        });
+    let (latest_scoped_meetings, search_query, query_vector_str, chunks, insights) = match analysis.intent {
+        QueryIntent::GeneralOverview => {
+            // =========================================================================
+            // PATH A: Purely Generic Overview / Cross-Meeting Status
+            // =========================================================================
+            let meetings = fetch_latest_meetings_for_scope(&pool, current_user, project_scope.as_deref(), 5).await;
+            if meetings.is_empty() {
+                let no_meetings_msg = "You don't have any recorded meetings in your accessible project scope yet. Once you record or import meetings, I can analyze action items, decisions, and summaries for you!".to_string();
+                let _ = on_event.send(ChatStreamEvent::Token { token: no_meetings_msg.clone() });
+                let _ = on_event.send(ChatStreamEvent::Done {
+                    answer: no_meetings_msg.clone(),
+                    citations: Vec::new(),
+                    relevancy_score: 0.0,
+                    relevancy_label: "No Meetings Found".to_string(),
+                    is_fallback: true,
+                });
 
-        let _ = sqlx::query(
-            "INSERT INTO chat_messages (id, user_id, chat_session_id, role, content, citations) VALUES ($1, $2, $3, 'user', $4, NULL), ($5, $2, $3, 'assistant', $6, NULL)"
-        )
-        .bind(&user_msg_id)
-        .bind(current_user)
-        .bind(&chat_session_id)
-        .bind(&q)
-        .bind(&ast_msg_id)
-        .bind(&no_meetings_msg)
-        .execute(&pool)
-        .await;
+                let _ = sqlx::query(
+                    "INSERT INTO chat_messages (id, user_id, chat_session_id, role, content, citations) VALUES ($1, $2, $3, 'user', $4, NULL), ($5, $2, $3, 'assistant', $6, NULL)"
+                )
+                .bind(&user_msg_id)
+                .bind(current_user)
+                .bind(&chat_session_id)
+                .bind(&q)
+                .bind(&ast_msg_id)
+                .bind(&no_meetings_msg)
+                .execute(&pool)
+                .await;
 
-        return Ok(());
-    }
-
-    let target_meeting_ids: Option<Vec<String>> = if !latest_scoped_meetings.is_empty() {
-        Some(latest_scoped_meetings.iter().map(|m| m.id.clone()).collect())
-    } else {
-        None
-    };
-
-    // Step 5: Rewrite query for search using cleaned query (free of @project: tags)
-    let query_to_rewrite = if cleaned_user_query.is_empty() { &q } else { &cleaned_user_query };
-    let search_query = rewrite_query_for_search(&api_key, target_model, query_to_rewrite, &memory).await;
-
-    // Step 6: Vector & FTS Keyword Search
-    let keywords = extract_search_keywords(&search_query);
-    let query_vector_str = fetch_query_embedding_local(&search_query).await;
-
-    let mut chunks = search_knowledge_chunks(
-        &pool,
-        project_scope.as_deref(),
-        &keywords,
-        query_vector_str.as_deref(),
-        current_user,
-        15,
-        target_meeting_ids.as_deref(),
-    )
-    .await;
-
-    // If general query, also pull representative chunks for all 5 latest meetings to ensure complete coverage
-    if let Some(ref m_ids) = target_meeting_ids {
-        let rep_chunks = fetch_representative_chunks_for_meetings(&pool, m_ids).await;
-        let mut seen_chunk_ids: HashSet<Uuid> = chunks.iter().map(|c| c.chunk_id).collect();
-        for rc in rep_chunks {
-            if seen_chunk_ids.insert(rc.chunk_id) {
-                chunks.push(rc);
+                return Ok(());
             }
-        }
-    }
 
-    let insights = fetch_scoped_insights(
-        &pool,
-        project_scope.as_deref(),
-        current_user,
-        target_meeting_ids.as_deref(),
-    )
-    .await;
+            let m_ids: Vec<String> = meetings.iter().map(|m| m.id.clone()).collect();
+            // Fetch 1 summary chunk per meeting (5 chunks max)
+            let chs = fetch_representative_chunks_for_meetings(&pool, &m_ids, 1).await;
+            // Fetch up to 8 action items / decisions from these meetings
+            let ins = fetch_scoped_insights(&pool, project_scope.as_deref(), current_user, Some(&m_ids), 8).await;
+
+            (meetings, analysis.search_query, None, chs, ins)
+        }
+        QueryIntent::SpecificSearch => {
+            // =========================================================================
+            // PATH B: Specific Topic / Keyword Search (Hybrid Vector + FTS RRF)
+            // =========================================================================
+            let rewritten_query = analysis.search_query;
+            let keywords = extract_search_keywords(&rewritten_query);
+            let q_vec = fetch_query_embedding_local(&rewritten_query).await;
+
+            // Fetch top 6 chunks across the scope via Hybrid RRF search
+            let chs = search_knowledge_chunks(
+                &pool,
+                project_scope.as_deref(),
+                &keywords,
+                q_vec.as_deref(),
+                current_user,
+                6,
+                None,
+            )
+            .await;
+
+            // Fetch up to 6 project-scoped insights
+            let ins = fetch_scoped_insights(&pool, project_scope.as_deref(), current_user, None, 6).await;
+
+            (Vec::new(), rewritten_query, q_vec, chs, ins)
+        }
+    };
 
     // Terminal Logging for visibility
     let mut chunk_project_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1209,12 +1260,8 @@ pub async fn api_chat_send_message_stream(
         project_scope
     );
     info!(
-        "[Chatbot] Query Mode    : {}",
-        if is_general_query {
-            "GENERAL OVERVIEW -> Scoped strictly to latest 5 meetings in recorded order"
-        } else {
-            "TOPIC / SPECIFIC SEARCH -> Global semantic search across project scope"
-        }
+        "[Chatbot] Query Mode    : {:?}",
+        analysis.intent
     );
     if !latest_scoped_meetings.is_empty() {
         let meeting_labels: Vec<String> = latest_scoped_meetings
@@ -1667,68 +1714,61 @@ pub async fn api_chat_send_message(
 
     let memory = load_conversation_memory(&pool, &chat_session_id, current_user).await;
 
-    // Step 4: Check if this is a general/cross-meeting/overview question
-    let is_general_query = is_general_overview_query(&q) || is_general_overview_query(&cleaned_user_query);
-    let latest_scoped_meetings = if is_general_query {
-        fetch_latest_meetings_for_scope(&pool, current_user, project_scope.as_deref(), 5).await
-    } else {
-        Vec::new()
-    };
+    // Step 4: Intelligent Query Analysis & Routing (Intent + Search Query in a single fast call)
+    let query_to_analyze = if cleaned_user_query.is_empty() { &q } else { &cleaned_user_query };
+    let analysis = analyze_and_rewrite_query(&api_key, target_model, query_to_analyze, &memory).await;
 
-    if is_general_query && latest_scoped_meetings.is_empty() {
-        return Ok(ChatApiResponse {
-            answer: "You don't have any recorded meetings in your accessible project scope yet. Once you record or import meetings, I can analyze action items, decisions, and summaries for you!".to_string(),
-            citations: Vec::new(),
-            relevancy_score: 0.0,
-            relevancy_label: "No Meetings Found".to_string(),
-            is_fallback: true,
-            recent_meetings: None,
-        });
-    }
-
-    let target_meeting_ids: Option<Vec<String>> = if !latest_scoped_meetings.is_empty() {
-        Some(latest_scoped_meetings.iter().map(|m| m.id.clone()).collect())
-    } else {
-        None
-    };
-
-    // Step 5: Rewrite follow-up query using cleaned query (free of @project: tags)
-    let query_to_rewrite = if cleaned_user_query.is_empty() { &q } else { &cleaned_user_query };
-    let search_query = rewrite_query_for_search(&api_key, target_model, query_to_rewrite, &memory).await;
-
-    // Step 6: Retrieve Chunks & Insights
-    let keywords = extract_search_keywords(&search_query);
-    let query_vector_str = fetch_query_embedding_local(&search_query).await;
-
-    let mut chunks = search_knowledge_chunks(
-        &pool,
-        project_scope.as_deref(),
-        &keywords,
-        query_vector_str.as_deref(),
-        current_user,
-        15,
-        target_meeting_ids.as_deref(),
-    )
-    .await;
-
-    // If general query, also pull representative chunks for all 5 latest meetings to ensure complete coverage
-    if let Some(ref m_ids) = target_meeting_ids {
-        let rep_chunks = fetch_representative_chunks_for_meetings(&pool, m_ids).await;
-        let mut seen_chunk_ids: HashSet<Uuid> = chunks.iter().map(|c| c.chunk_id).collect();
-        for rc in rep_chunks {
-            if seen_chunk_ids.insert(rc.chunk_id) {
-                chunks.push(rc);
+    let (latest_scoped_meetings, search_query, query_vector_str, chunks, insights) = match analysis.intent {
+        QueryIntent::GeneralOverview => {
+            // =========================================================================
+            // PATH A: Purely Generic Overview / Cross-Meeting Status
+            // =========================================================================
+            let meetings = fetch_latest_meetings_for_scope(&pool, current_user, project_scope.as_deref(), 5).await;
+            if meetings.is_empty() {
+                return Ok(ChatApiResponse {
+                    answer: "You don't have any recorded meetings in your accessible project scope yet. Once you record or import meetings, I can analyze action items, decisions, and summaries for you!".to_string(),
+                    citations: Vec::new(),
+                    relevancy_score: 0.0,
+                    relevancy_label: "No Meetings Found".to_string(),
+                    is_fallback: true,
+                    recent_meetings: None,
+                });
             }
-        }
-    }
 
-    let insights = fetch_scoped_insights(
-        &pool,
-        project_scope.as_deref(),
-        current_user,
-        target_meeting_ids.as_deref(),
-    )
-    .await;
+            let m_ids: Vec<String> = meetings.iter().map(|m| m.id.clone()).collect();
+            // Fetch 1 summary chunk per meeting (5 chunks max)
+            let chs = fetch_representative_chunks_for_meetings(&pool, &m_ids, 1).await;
+            // Fetch up to 8 action items / decisions from these meetings
+            let ins = fetch_scoped_insights(&pool, project_scope.as_deref(), current_user, Some(&m_ids), 8).await;
+
+            (meetings, analysis.search_query, None, chs, ins)
+        }
+        QueryIntent::SpecificSearch => {
+            // =========================================================================
+            // PATH B: Specific Topic / Keyword Search (Hybrid Vector + FTS RRF)
+            // =========================================================================
+            let rewritten_query = analysis.search_query;
+            let keywords = extract_search_keywords(&rewritten_query);
+            let q_vec = fetch_query_embedding_local(&rewritten_query).await;
+
+            // Fetch top 6 chunks across the scope via Hybrid RRF search
+            let chs = search_knowledge_chunks(
+                &pool,
+                project_scope.as_deref(),
+                &keywords,
+                q_vec.as_deref(),
+                current_user,
+                6,
+                None,
+            )
+            .await;
+
+            // Fetch up to 6 project-scoped insights
+            let ins = fetch_scoped_insights(&pool, project_scope.as_deref(), current_user, None, 6).await;
+
+            (Vec::new(), rewritten_query, q_vec, chs, ins)
+        }
+    };
 
     // Terminal Logging for visibility
     let mut chunk_project_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1749,12 +1789,8 @@ pub async fn api_chat_send_message(
         project_scope
     );
     info!(
-        "[Chatbot] Query Mode    : {}",
-        if is_general_query {
-            "GENERAL OVERVIEW -> Scoped strictly to latest 5 meetings in recorded order"
-        } else {
-            "TOPIC / SPECIFIC SEARCH -> Global semantic search across project scope"
-        }
+        "[Chatbot] Query Mode    : {:?}",
+        analysis.intent
     );
     if !latest_scoped_meetings.is_empty() {
         let meeting_labels: Vec<String> = latest_scoped_meetings

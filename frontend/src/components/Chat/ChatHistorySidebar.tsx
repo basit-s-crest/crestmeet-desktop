@@ -98,6 +98,11 @@ export function ChatHistorySidebar({
     const older: ChatSessionRecord[] = [];
 
     for (const session of filtered) {
+      // Never show 0-message empty sessions in history sidebar
+      if (session.messageCount === 0) {
+        continue;
+      }
+
       if (session.pinned) {
         pinned.push(session);
         continue;
