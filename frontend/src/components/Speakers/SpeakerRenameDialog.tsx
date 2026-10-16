@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { MeetingSpeaker, Person } from '@/types';
 import { User, Users, Merge, Mic, Volume2, Sparkles, Check, AlertTriangle } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 
 export interface SpeakerRenameDialogProps {
     isOpen: boolean;
@@ -38,6 +39,7 @@ export const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
     const [selectedPersonId, setSelectedPersonId] = useState<string | undefined>(undefined);
     const [targetMergeSpeakerId, setTargetMergeSpeakerId] = useState<string>('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [optInVoiceProfile, setOptInVoiceProfile] = useState(false);
     const [activeTab, setActiveTab] = useState<'rename' | 'merge'>('rename');
     const [error, setError] = useState<string | null>(null);
 
@@ -46,6 +48,7 @@ export const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
             setName(speaker.display_name || speaker.suggested_name || '');
             setSelectedPersonId(speaker.person_id || undefined);
             setTargetMergeSpeakerId('');
+            setOptInVoiceProfile(false);
             setError(null);
             setActiveTab('rename');
         }
@@ -72,6 +75,18 @@ export const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
             setIsSubmitting(true);
             setError(null);
             await onRename(speaker.id, trimmed, selectedPersonId);
+
+            if (optInVoiceProfile && selectedPersonId) {
+                try {
+                    await invoke('api_enroll_voice_profile', {
+                        personId: selectedPersonId,
+                        speakerId: speaker.id,
+                    });
+                } catch (enrollErr) {
+                    console.warn('Voice profile opt-in enrollment failed:', enrollErr);
+                }
+            }
+
             onClose();
         } catch (err: any) {
             setError(err?.toString() || 'Failed to rename speaker.');
@@ -215,6 +230,22 @@ export const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
                                             );
                                         })}
                                     </div>
+                                </div>
+                            )}
+
+                            {/* Opt-in Voice Profile Checkbox */}
+                            {selectedPersonId && (
+                                <div className="flex items-start gap-2 pt-1 pb-1 px-1">
+                                    <input
+                                        type="checkbox"
+                                        id="opt-in-voice"
+                                        checked={optInVoiceProfile}
+                                        onChange={(e) => setOptInVoiceProfile(e.target.checked)}
+                                        className="mt-0.5 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                    />
+                                    <label htmlFor="opt-in-voice" className="text-[11px] text-muted-foreground leading-snug cursor-pointer select-none">
+                                        <span className="font-medium text-foreground">Save voice profile</span> for future meetings (opt-in biometric voice matching)
+                                    </label>
                                 </div>
                             )}
 

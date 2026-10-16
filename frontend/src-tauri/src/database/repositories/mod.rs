@@ -6,3 +6,4 @@ pub mod transcript;
 pub mod transcript_chunk;
 pub mod media_request;
 pub mod speakers;
+pub mod voice_profiles;

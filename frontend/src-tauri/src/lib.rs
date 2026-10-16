@@ -836,6 +836,9 @@ pub fn run() {
             speakers::commands::api_auto_link_mic_speaker,
             speakers::commands::api_list_people,
             speakers::commands::api_run_screen_ocr_naming,
+            speakers::commands::api_enroll_voice_profile,
+            speakers::commands::api_delete_voice_profile,
+            speakers::commands::api_get_voice_profile,
             // Action items ("My Tasks") commands
             action_items::commands::api_list_my_action_items,
             action_items::commands::api_update_action_item,

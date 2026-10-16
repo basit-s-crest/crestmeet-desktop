@@ -16,7 +16,7 @@
 | **Step 4** | **"My Tasks" Page & Audio Evidence Drawer** | Next.js `/action-items` route, tabs (Open, Needs review, Done), evidence audio seek | ✅ Completed | 100% |
 | **Step 5** | **sherpa-onnx Local Diarization** | Pyannote 3.0 + speaker embedding ONNX models in Rust, turn builder, echo filter | ✅ Completed | 100% |
 | **Step 6** | **Post-Meeting Screen OCR Naming** | App adapters (Teams/Zoom/Meet), 10-30 frame seek, OS OCR, Hungarian voting | ✅ Completed | 100% |
-| **Step 7** | **Opt-in Voice Profiles** | Centroid embedding store, cosine similarity matching for repeat attendees | ⏳ Queued | 0% |
+| **Step 7** | **Opt-in Voice Profiles** | Centroid embedding store, cosine similarity matching for repeat attendees | ✅ Completed | 100% |
 
 ---
 
@@ -96,9 +96,10 @@
 - [x] Registered `api_run_screen_ocr_naming` and integrated "Scan Screen Names" trigger in `MeetingSpeakersBar.tsx`.
 
 ### Step 7: Opt-in Voice Profiles
-- [ ] Create `voice_profiles` table (`person_id`, `model_id`, `embedding`, `n_samples`).
-- [ ] Opt-in privacy settings & delete-my-voice controls.
-- [ ] Cosine similarity matcher across meeting attendees.
+- [x] Create `voice_profiles` table (`person_id`, `model_id`, `embedding`, `n_samples`, `is_opted_in`).
+- [x] Built `VoiceProfilesRepository` with running mean centroid update and cosine similarity matcher (`voice_profiles.rs`).
+- [x] Added opt-in biometric consent checkbox in `SpeakerRenameDialog.tsx`.
+- [x] Implemented delete-my-voice controls and Tauri commands (`api_enroll_voice_profile`, `api_delete_voice_profile`, `api_get_voice_profile`).
 
 ---
 
@@ -113,3 +114,4 @@
 | 2026-10-16 | Step 4 | Completed Step 4: Built Next.js `/action-items` page, `TaskList`, `TaskCard`, `ReviewCard`, `TaskDrawer`, Sidebar "My Tasks" integration, and Tauri CRUD commands. |
 | 2026-10-16 | Step 5 | Completed Step 5: Implemented local diarization pipeline with per-channel processing (`mic:S0` vs `sys:S1...`), 512-dim centroid calculation, word alignment, echo filter, and automatic post-meeting trigger. |
 | 2026-10-16 | Step 6 | Completed Step 6: Built screen OCR naming engine with Teams/Zoom/Meet adapters, clean frame midpoint selection, attendee fuzzy-matching, 1-to-1 voting solver, and one-click suggestion chips. |
+| 2026-10-16 | Step 7 | Completed Step 7: Built opt-in voice profiles system with running mean centroid updates, cosine similarity matcher, GDPR delete-my-voice compliance, and opt-in UI controls. |

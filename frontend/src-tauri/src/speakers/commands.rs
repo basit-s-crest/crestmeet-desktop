@@ -212,3 +212,65 @@ pub async fn api_run_screen_ocr_naming<R: Runtime>(
         })
 }
 
+/// Enroll or update a person's voice profile using a speaker cluster's centroid
+#[tauri::command]
+pub async fn api_enroll_voice_profile(
+    state: State<'_, AppState>,
+    person_id: String,
+    speaker_id: String,
+) -> Result<crate::database::repositories::voice_profiles::VoiceProfile, String> {
+    let pool = state.db_manager.pool();
+    let pid = Uuid::from_str(&person_id).map_err(|e| format!("Invalid person_id: {}", e))?;
+    let sid = Uuid::from_str(&speaker_id).map_err(|e| format!("Invalid speaker_id: {}", e))?;
+
+    let speaker = sqlx::query!(
+        "SELECT embedding, embedding_model FROM meeting_speakers WHERE id = $1",
+        sid
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "Speaker cluster not found".to_string())?;
+
+    let embedding = speaker.embedding.ok_or_else(|| "Speaker cluster has no embedding".to_string())?;
+    let model_id = speaker.embedding_model.unwrap_or_else(|| "wespeaker-voxceleb-resnet34".to_string());
+
+    crate::database::repositories::voice_profiles::VoiceProfilesRepository::enroll_or_update_profile(
+        pool,
+        pid,
+        &model_id,
+        &embedding,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Delete a voice profile
+#[tauri::command]
+pub async fn api_delete_voice_profile(
+    state: State<'_, AppState>,
+    person_id: String,
+) -> Result<bool, String> {
+    let pool = state.db_manager.pool();
+    let pid = Uuid::from_str(&person_id).map_err(|e| format!("Invalid person_id: {}", e))?;
+
+    crate::database::repositories::voice_profiles::VoiceProfilesRepository::delete_profile(pool, pid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Get a person's voice profile details
+#[tauri::command]
+pub async fn api_get_voice_profile(
+    state: State<'_, AppState>,
+    person_id: String,
+) -> Result<Option<crate::database::repositories::voice_profiles::VoiceProfile>, String> {
+    let pool = state.db_manager.pool();
+    let pid = Uuid::from_str(&person_id).map_err(|e| format!("Invalid person_id: {}", e))?;
+
+    crate::database::repositories::voice_profiles::VoiceProfilesRepository::get_profile(pool, pid)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+
