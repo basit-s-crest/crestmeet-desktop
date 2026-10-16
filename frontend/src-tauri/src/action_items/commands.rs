@@ -3,7 +3,7 @@
 use super::queries::{ActionItemEvidence, ActionItemPatch, ActionItemsQueries, ListActionItemsResponse};
 use crate::database::repositories::speakers::SpeakersRepository;
 use crate::state::AppState;
-use log::{error, info};
+use log::error;
 use std::str::FromStr;
 use tauri::{AppHandle, Emitter, Runtime, State};
 use uuid::Uuid;

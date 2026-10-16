@@ -5,7 +5,7 @@ use std::time::Instant;
 use anyhow::{anyhow, Result};
 use sqlx::PgPool;
 use tauri::{AppHandle, Emitter, Runtime};
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::aligner::{RawTranscriptTurn, TranscriptAligner};
@@ -47,13 +47,13 @@ impl DiarizationEngine {
         }
 
         // 1. Fetch transcript segments for this meeting from database
-        let rows = sqlx::query!(
+        let rows: Vec<(String, String, Option<f64>, Option<f64>, Option<Uuid>)> = sqlx::query_as(
             "SELECT id, transcript, audio_start_time, audio_end_time, speaker_id 
              FROM transcripts 
              WHERE meeting_id = $1 
              ORDER BY COALESCE(audio_start_time, 0.0) ASC",
-            meeting_id
         )
+        .bind(meeting_id)
         .fetch_all(pool)
         .await
         .map_err(|e| anyhow!("Failed to fetch transcripts for diarization: {}", e))?;
@@ -69,21 +69,21 @@ impl DiarizationEngine {
         }
 
         let mut raw_turns: Vec<RawTranscriptTurn> = Vec::new();
-        for (i, row) in rows.iter().enumerate() {
-            let start = row.audio_start_time.unwrap_or(i as f64 * 3.0);
-            let end = row.audio_end_time.unwrap_or(start + 3.0);
+        for (i, (t_id, transcript, audio_start, audio_end, _)) in rows.iter().enumerate() {
+            let start = audio_start.unwrap_or(i as f64 * 3.0);
+            let end = audio_end.unwrap_or(start + 3.0);
 
             // Channel heuristic: detect if segment text starts with "[Mic]" or "[Sys]" or "Me:"
-            let (channel, cleaned_text) = if row.transcript.starts_with("[Mic]") || row.transcript.starts_with("Me:") {
-                ("mic".to_string(), row.transcript.trim_start_matches("[Mic]").trim_start_matches("Me:").trim().to_string())
-            } else if row.transcript.starts_with("[Sys]") || row.transcript.starts_with("System:") {
-                ("system".to_string(), row.transcript.trim_start_matches("[Sys]").trim_start_matches("System:").trim().to_string())
+            let (channel, cleaned_text) = if transcript.starts_with("[Mic]") || transcript.starts_with("Me:") {
+                ("mic".to_string(), transcript.trim_start_matches("[Mic]").trim_start_matches("Me:").trim().to_string())
+            } else if transcript.starts_with("[Sys]") || transcript.starts_with("System:") {
+                ("system".to_string(), transcript.trim_start_matches("[Sys]").trim_start_matches("System:").trim().to_string())
             } else {
-                ("system".to_string(), row.transcript.clone())
+                ("system".to_string(), transcript.clone())
             };
 
             raw_turns.push(RawTranscriptTurn {
-                id: row.id.clone(),
+                id: t_id.clone(),
                 text: cleaned_text,
                 start_time: start,
                 end_time: end,
@@ -239,15 +239,14 @@ impl DiarizationEngine {
         }
 
         // 7. Auto-link mic:S0 to current user if available
-        let meeting_owner = sqlx::query!(
+        let meeting_owner: Option<Uuid> = sqlx::query_scalar(
             "SELECT user_id FROM meetings WHERE id = $1",
-            meeting_id
         )
+        .bind(meeting_id)
         .fetch_optional(pool)
         .await
         .ok()
-        .flatten()
-        .and_then(|r| r.user_id);
+        .flatten();
 
         if let Some(user_id) = meeting_owner {
             let _ = SpeakersRepository::auto_link_mic_speaker(

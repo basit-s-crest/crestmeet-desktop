@@ -274,7 +274,7 @@ impl ActionItemsQueries {
         .fetch_optional(pool)
         .await?;
 
-        let (id, content, meeting_id, title, start_seconds, evidence_turns) = match row {
+        let (id, content, meeting_id, title, start_seconds, _evidence_turns) = match row {
             Some(r) => r,
             None => return Ok(None),
         };
@@ -297,7 +297,7 @@ impl ActionItemsQueries {
             .into_iter()
             .map(|(t_id, text, t_time, spk)| EvidenceTurnSnippet {
                 id: t_id,
-                speaker_name: spk,
+                speaker_name: spk.unwrap_or_else(|| "Unknown".to_string()),
                 text,
                 timestamp: t_time.unwrap_or(0.0),
             })

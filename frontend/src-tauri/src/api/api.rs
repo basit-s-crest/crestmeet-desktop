@@ -1166,7 +1166,7 @@ pub async fn api_save_meeting_title<R: Runtime>(
 
 #[tauri::command]
 pub async fn api_save_transcript<R: Runtime>(
-    _app: AppHandle<R>,
+    app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     meeting_title: String,
     transcripts: Vec<serde_json::Value>,

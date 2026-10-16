@@ -3,7 +3,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::{Error as SqlxError, FromRow, PgPool};
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::diarization::config::cosine_similarity;
@@ -150,13 +150,10 @@ impl VoiceProfilesRepository {
 
         if let Some((person_id, sim)) = best_match {
             // Fetch person display name
-            let name: Option<String> = sqlx::query_scalar!(
-                "SELECT display_name FROM people WHERE id = $1",
-                person_id
-            )
-            .fetch_optional(pool)
-            .await?
-            .flatten();
+            let name: Option<String> = sqlx::query_scalar("SELECT display_name FROM people WHERE id = $1")
+                .bind(person_id)
+                .fetch_optional(pool)
+                .await?;
 
             if let Some(display_name) = name {
                 return Ok(Some(VoiceMatchResult {

@@ -3,7 +3,7 @@
 use crate::database::models::{MeetingSpeaker, Person};
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, PgPool};
-use tracing::{error, info};
+use tracing::info;
 use uuid::Uuid;
 
 pub struct SpeakersRepository;

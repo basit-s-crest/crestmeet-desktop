@@ -3,7 +3,7 @@
 use crate::database::models::{MeetingSpeaker, Person};
 use crate::database::repositories::speakers::SpeakersRepository;
 use crate::state::AppState;
-use log::{error, info};
+use log::error;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use tauri::{AppHandle, Emitter, Runtime, State};
@@ -223,17 +223,17 @@ pub async fn api_enroll_voice_profile(
     let pid = Uuid::from_str(&person_id).map_err(|e| format!("Invalid person_id: {}", e))?;
     let sid = Uuid::from_str(&speaker_id).map_err(|e| format!("Invalid speaker_id: {}", e))?;
 
-    let speaker = sqlx::query!(
+    let speaker: (Option<Vec<f32>>, Option<String>) = sqlx::query_as(
         "SELECT embedding, embedding_model FROM meeting_speakers WHERE id = $1",
-        sid
     )
+    .bind(sid)
     .fetch_optional(pool)
     .await
     .map_err(|e| e.to_string())?
     .ok_or_else(|| "Speaker cluster not found".to_string())?;
 
-    let embedding = speaker.embedding.ok_or_else(|| "Speaker cluster has no embedding".to_string())?;
-    let model_id = speaker.embedding_model.unwrap_or_else(|| "wespeaker-voxceleb-resnet34".to_string());
+    let embedding = speaker.0.ok_or_else(|| "Speaker cluster has no embedding".to_string())?;
+    let model_id = speaker.1.unwrap_or_else(|| "wespeaker-voxceleb-resnet34".to_string());
 
     crate::database::repositories::voice_profiles::VoiceProfilesRepository::enroll_or_update_profile(
         pool,

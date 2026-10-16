@@ -35,14 +35,11 @@ pub async fn api_get_meeting_diarization_status(
 ) -> Result<DiarizationStatus, String> {
     let pool = state.db_manager.pool();
 
-    let count: i64 = sqlx::query_scalar!(
-        "SELECT COUNT(*) FROM meeting_speakers WHERE meeting_id = $1",
-        meeting_id
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(Some(0))
-    .unwrap_or(0);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meeting_speakers WHERE meeting_id = $1")
+        .bind(&meeting_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
 
     if count > 0 {
         Ok(DiarizationStatus {

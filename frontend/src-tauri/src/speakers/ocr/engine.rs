@@ -1,20 +1,20 @@
 // frontend/src-tauri/src/speakers/ocr/engine.rs
 
-use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use sqlx::PgPool;
 use tauri::{AppHandle, Emitter, Runtime};
-use tracing::{info, warn, error};
+use tracing::info;
 
 use super::adapters::AppAdapter;
 use super::frame_selector::{CandidateSpeechSegment, FrameSelector};
 use super::voting::{OcrObservation, OcrVotingSystem};
-use crate::database::models::{MeetingSpeaker, Person};
+use crate::database::models::Person;
 use crate::database::repositories::speakers::SpeakersRepository;
 
 pub struct OcrNamingEngine {
     selector: FrameSelector,
     voting: OcrVotingSystem,
+    #[allow(dead_code)]
     default_adapter: AppAdapter,
 }
 
@@ -76,29 +76,29 @@ impl OcrNamingEngine {
             .collect();
 
         // 3. Gather transcript speech segments for timing
-        let transcript_rows = sqlx::query!(
+        let transcript_rows: Vec<(Option<f64>, Option<f64>, Option<f32>, String)> = sqlx::query_as(
             "SELECT t.audio_start_time, t.audio_end_time, t.speaker_confidence, s.cluster_key
              FROM transcripts t
              JOIN meeting_speakers s ON t.speaker_id = s.id
-             WHERE t.meeting_id = $1",
-            meeting_id
+             WHERE t.meeting_id = $1"
         )
+        .bind(meeting_id)
         .fetch_all(pool)
         .await
         .unwrap_or_default();
 
         let mut candidate_segments: Vec<CandidateSpeechSegment> = Vec::new();
-        for row in transcript_rows {
-            let start = row.audio_start_time.unwrap_or(0.0);
-            let end = row.audio_end_time.unwrap_or(start + 2.0);
+        for (start_opt, end_opt, conf_opt, cluster_key) in transcript_rows {
+            let start = start_opt.unwrap_or(0.0);
+            let end = end_opt.unwrap_or(start + 2.0);
             let dur = (end - start).max(0.0);
 
             candidate_segments.push(CandidateSpeechSegment {
-                cluster_key: row.cluster_key,
+                cluster_key,
                 start_seconds: start,
                 end_seconds: end,
                 duration: dur,
-                confidence: row.speaker_confidence.unwrap_or(0.8),
+                confidence: conf_opt.unwrap_or(0.8),
                 is_clean: dur >= 1.5,
             });
         }
