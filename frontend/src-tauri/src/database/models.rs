@@ -57,7 +57,11 @@ pub struct Transcript {
     #[sqlx(default)]
     #[serde(default)]
     pub user_id: Option<Uuid>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub speaker_id: Option<Uuid>,
 }
+
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SummaryProcess {
@@ -268,4 +272,62 @@ pub struct MediaRequestWithDetails {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct Person {
+    pub id: Uuid,
+    pub user_id: Option<Uuid>,
+    pub display_name: String,
+    pub email: Option<String>,
+    pub aliases: Vec<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MeetingSpeaker {
+    pub id: Uuid,
+    pub meeting_id: String,
+    pub cluster_key: String,
+    pub channel: String,
+    pub person_id: Option<Uuid>,
+    pub display_name: Option<String>,
+    pub name_source: Option<String>,
+    pub name_confidence: Option<f32>,
+    pub suggested_name: Option<String>,
+    pub embedding: Option<Vec<f32>>,
+    pub embedding_model: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ResolvedActionItem {
+    pub id: Uuid,
+    pub meeting_id: String,
+    pub project_id: Uuid,
+    pub meeting_title: String,
+    pub meeting_date: chrono::DateTime<chrono::Utc>,
+    pub task: String,
+    pub due_date: Option<chrono::NaiveDate>,
+    pub due_phrase: Option<String>,
+    pub status: String,
+    pub assignment_type: Option<String>,
+    pub confidence: Option<f32>,
+    pub start_seconds: Option<f64>,
+    pub evidence_turn_ids: Option<Vec<String>>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub assignee_speaker_id: Option<Uuid>,
+    pub assigner_speaker_id: Option<Uuid>,
+    pub assignee_person_id_resolved: Option<Uuid>,
+    pub assignee_user_id: Option<Uuid>,
+    pub assignee_label: Option<String>,
+    pub assigner_user_id: Option<Uuid>,
+    pub assigner_label: Option<String>,
+    pub speaker_unresolved: bool,
+    pub user_edited: bool,
+}
+
 

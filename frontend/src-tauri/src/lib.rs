@@ -49,6 +49,7 @@ pub mod groq;
 pub mod openrouter;
 pub mod parakeet_engine;
 pub mod projects;
+pub mod speakers;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -826,6 +827,12 @@ pub fn run() {
             chat::api_chat_fork_shared,
             chat::api_chat_revoke_share,
             chat::api_chat_list_shares,
+            // Speaker management & identity commands
+            speakers::commands::api_list_meeting_speakers,
+            speakers::commands::api_rename_speaker,
+            speakers::commands::api_merge_speakers,
+            speakers::commands::api_auto_link_mic_speaker,
+            speakers::commands::api_list_people,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

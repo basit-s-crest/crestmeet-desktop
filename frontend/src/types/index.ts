@@ -16,7 +16,10 @@ export interface Transcript {
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  speaker_id?: string;
+  speaker_name?: string;
 }
+
 
 export interface TranscriptUpdate {
   text: string;
@@ -138,6 +141,33 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  speakerId?: string;
+  speakerName?: string;
+  speakerChannel?: 'mic' | 'system';
+}
+
+export interface MeetingSpeaker {
+  id: string;
+  meeting_id: string;
+  cluster_key: string;
+  channel: 'mic' | 'system';
+  person_id?: string | null;
+  display_name?: string | null;
+  name_source?: 'manual' | 'channel' | 'voice_profile' | 'ui_automation' | 'ocr' | 'text_cue' | null;
+  name_confidence?: number | null;
+  suggested_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Person {
+  id: string;
+  user_id?: string | null;
+  display_name: string;
+  email?: string | null;
+  aliases: string[];
+  created_at: string;
+  updated_at: string;
 }
 
 export * from './project';

@@ -5,6 +5,7 @@ import { TranscriptView } from '@/components/TranscriptView';
 import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { MeetingVideoPlayer } from './MeetingVideoPlayer';
+import { MeetingSpeakersBar } from '@/components/Speakers/MeetingSpeakersBar';
 import { useMemo, useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuth } from '@/contexts/AuthContext';
@@ -93,6 +94,8 @@ export function TranscriptPanel({
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      speakerId: t.speaker_id,
+      speakerName: t.speaker_name,
     }));
   }, [transcripts, usePagination, segments]);
 
@@ -204,6 +207,13 @@ export function TranscriptPanel({
           uploadStatus={uploadStatus}
           onClose={() => setIsVideoPlayerOpen(false)}
         />
+      )}
+
+      {/* Recognized Speakers bar (with click-to-rename/merge dialog) */}
+      {meetingId && !isRecording && (
+        <div className="px-1 mb-2">
+          <MeetingSpeakersBar meetingId={meetingId} />
+        </div>
       )}
 
       {/* Transcript content - use virtualized view for better performance */}

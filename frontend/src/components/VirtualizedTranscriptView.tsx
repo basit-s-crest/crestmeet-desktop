@@ -10,6 +10,7 @@ import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
 import { listen } from "@tauri-apps/api/event";
+import { SpeakerChip } from "./Speakers/SpeakerChip";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -127,6 +128,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
     showConfidence,
     isHighlighted = false,
     highlightTerms = [],
+    speakerName,
+    speakerChannel,
 }: {
     id: string;
     timestamp: number;
@@ -136,6 +139,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
     showConfidence: boolean;
     isHighlighted?: boolean;
     highlightTerms?: string[];
+    speakerName?: string;
+    speakerChannel?: 'mic' | 'system';
 }) {
     const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
 
@@ -155,30 +160,41 @@ const TranscriptSegment = memo(function TranscriptSegment({
                 </div>
             )}
             <div className="flex items-start gap-2">
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                        <button
-                            type="button"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                if (typeof window !== 'undefined' && typeof timestamp === 'number') {
-                                    window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: timestamp } }));
-                                }
-                            }}
-                            className="text-xs text-gray-400 hover:text-blue-600 hover:bg-blue-50 px-1 py-0.5 rounded font-mono transition-colors mt-0.5 flex-shrink-0 min-w-[50px] text-left cursor-pointer group"
-                        >
-                            <span className="group-hover:underline">{formatRecordingTime(timestamp)}</span>
-                        </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                        <div className="space-y-1">
-                            <p className="text-xs">Click to jump video to this moment</p>
-                            {confidence !== undefined && showConfidence && (
-                                <ConfidenceIndicator confidence={confidence} showIndicator={showConfidence} />
-                            )}
-                        </div>
-                    </TooltipContent>
-                </Tooltip>
+                <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
+                    <Tooltip>
+                        <TooltipTrigger asChild>
+                            <button
+                                type="button"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (typeof window !== 'undefined' && typeof timestamp === 'number') {
+                                        window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: timestamp } }));
+                                    }
+                                }}
+                                className="text-xs text-gray-400 hover:text-blue-600 hover:bg-blue-50 px-1 py-0.5 rounded font-mono transition-colors min-w-[50px] text-left cursor-pointer group"
+                            >
+                                <span className="group-hover:underline">{formatRecordingTime(timestamp)}</span>
+                            </button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                            <div className="space-y-1">
+                                <p className="text-xs">Click to jump video to this moment</p>
+                                {confidence !== undefined && showConfidence && (
+                                    <ConfidenceIndicator confidence={confidence} showIndicator={showConfidence} />
+                                )}
+                            </div>
+                        </TooltipContent>
+                    </Tooltip>
+
+                    {speakerName && (
+                        <SpeakerChip
+                            speakerName={speakerName}
+                            channel={speakerChannel}
+                            compact
+                            showEditOnHover={false}
+                        />
+                    )}
+                </div>
                 <div className="flex-1">
                     {isStreaming ? (
                         <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
@@ -554,6 +570,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         showConfidence={showConfidence}
                                         isHighlighted={highlightedSegmentId === segment.id}
                                         highlightTerms={highlightedSegmentId === segment.id ? highlightTerms : []}
+                                        speakerName={segment.speakerName}
+                                        speakerChannel={segment.speakerChannel}
                                     />
                                 </div>
                             );
@@ -612,6 +630,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         showConfidence={showConfidence}
                                         isHighlighted={highlightedSegmentId === segment.id}
                                         highlightTerms={highlightedSegmentId === segment.id ? highlightTerms : []}
+                                        speakerName={segment.speakerName}
+                                        speakerChannel={segment.speakerChannel}
                                     />
                                 </motion.div>
                             );
