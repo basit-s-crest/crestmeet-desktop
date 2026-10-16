@@ -11,10 +11,9 @@
 | Step | Milestone / Phase | Scope | Status | Progress |
 |:---:|:---|:---|:---:|:---:|
 | **Step 1** | **Database Schema & Late-Binding Foundation** | `people`, `meeting_speakers`, `meeting_insights` columns, `action_items_resolved` view/query | ✅ Completed | 100% |
-| **Step 1** | **Database Schema & Late-Binding Foundation** | `people`, `meeting_speakers`, `meeting_insights` columns, `action_items_resolved` view/query | ✅ Completed | 100% |
 | **Step 2** | **Speaker Management & Rename / Merge UI** | Tauri commands for speakers, Rename dialog, Merge UI, mic cluster auto-link | ✅ Completed | 100% |
-| **Step 3** | **Structured Action Item Extraction** | Candidate detection, late-binding prompt, dedupe & validation, write pipeline | 🟡 In Progress | 20% |
-| **Step 4** | **"My Tasks" Page & Audio Evidence Drawer** | Next.js `/action-items` route, tabs (Open, Needs review, Done), evidence audio seek | ⏳ Queued | 0% |
+| **Step 3** | **Structured Action Item Extraction** | Candidate detection, late-binding prompt, dedupe & validation, write pipeline | ✅ Completed | 100% |
+| **Step 4** | **"My Tasks" Page & Audio Evidence Drawer** | Next.js `/action-items` route, tabs (Open, Needs review, Done), evidence audio seek | 🟡 In Progress | 20% |
 | **Step 5** | **sherpa-onnx Local Diarization** | Pyannote 3.0 + speaker embedding ONNX models in Rust, turn builder, echo filter | ⏳ Queued | 0% |
 | **Step 6** | **Post-Meeting Screen OCR Naming** | App adapters (Teams/Zoom/Meet), 10-30 frame seek, OS OCR, Hungarian voting | ⏳ Queued | 0% |
 | **Step 7** | **Opt-in Voice Profiles** | Centroid embedding store, cosine similarity matching for repeat attendees | ⏳ Queued | 0% |
@@ -55,14 +54,16 @@
 - [x] Build `MeetingSpeakersBar.tsx` and integrate into `TranscriptPanel.tsx` and `VirtualizedTranscriptView.tsx`.
 
 ### Step 3: Structured Action Item Extraction
-- [ ] Two-stage extraction prompt:
+- [x] Two-stage extraction prompt:
   - Stage 1: Windowed candidate detection (commitment keywords).
   - Stage 2: Structured JSON extraction with speaker references (`assigner_ref`, `assignee_ref`, `evidence_turns`, `due_phrase`).
-- [ ] Validation in Rust / Python RAG pipeline:
+- [x] Validation in Rust / Python RAG pipeline:
   - Verify referenced speakers exist in `meeting_speakers`.
   - Date resolution logic: compute exact ISO timestamp from meeting date + `due_phrase`.
-- [ ] Late-binding writer:
+- [x] Late-binding writer:
   - Upsert on `(meeting_id, dedupe_key)` preserving `user_edited` and completed status.
+  - Implemented in `crestmeet_rag/action_items/extractor.py` and integrated into `crestmeet_rag/indexing.py`.
+  - Verified with comprehensive test suite (`tests/test_action_items.py`).
 
 ### Step 4: "My Tasks" Page & Audio Evidence Drawer
 - [ ] Implement Tauri commands:
@@ -112,4 +113,5 @@
 | 2026-10-16 | Setup | Switched to branch `feature/speaker-identity-assignment`, cleared previous progress, and initialized roadmap. |
 | 2026-10-16 | Step 1 | Added schema migration `20261016000000_speaker_identity_and_action_items.sql`, updated `DatabaseManager::init_schema`, added `Person`, `MeetingSpeaker`, `ResolvedActionItem` models, and created `SpeakersRepository`. |
 | 2026-10-16 | Step 2 | Implemented Tauri commands (`api_list_meeting_speakers`, `api_rename_speaker`, `api_merge_speakers`, `api_auto_link_mic_speaker`, `api_list_people`), `useMeetingSpeakers` hook, `SpeakerRenameDialog`, `SpeakerChip`, and `MeetingSpeakersBar`. Integrated into `TranscriptPanel` and `VirtualizedTranscriptView`. |
-| 2026-10-16 | Step 3 | Commenced Step 3: Structured Action Item Extraction with late-binding assigner/assignee references, candidate detection, and dedupe writer. |
+| 2026-10-16 | Step 3 | Implemented `ActionItemExtractor` with candidate detection, relative date resolution, speaker/person late-binding matching, deterministic dedupe hashing, and upsert logic in `indexing.py`. Unit tests passing 100%. |
+| 2026-10-16 | Step 4 | Commenced Step 4: Building "My Tasks" Page, Action Items Tauri commands, Evidence Drawer, and interactive status management. |

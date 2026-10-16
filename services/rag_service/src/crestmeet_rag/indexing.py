@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from crestmeet_rag.chunking.chunker import SpeakerTurnChunker
 from crestmeet_rag.embeddings.embedder import LocalEmbedder
 from crestmeet_rag.models.schemas import ChunkRequest, TranscriptUtterance
+from crestmeet_rag.action_items.extractor import ActionItemExtractor
 
 load_dotenv()
 
@@ -33,6 +34,7 @@ class MeetingIndexer:
         self.db_url = db_url or get_db_url()
         self.chunker = SpeakerTurnChunker()
         self.embedder = LocalEmbedder()
+        self.action_item_extractor = ActionItemExtractor()
 
     def index_meeting(self, meeting_id: str) -> Dict[str, Any]:
         """Index a single meeting into knowledge_chunks and meeting_insights."""
@@ -227,18 +229,70 @@ class MeetingIndexer:
                                 (project_id, m_id, overview.strip(), summary_header, self.chunker.count_tokens(overview), summary_hash, s_vec_str, model_tag),
                             )
 
-                        # 6b. Action items & key decisions
-                        action_items = summary_json.get("action_items") or []
-                        for item in action_items:
-                            text = item if isinstance(item, str) else item.get("description", str(item))
-                            owner = item.get("assignee") if isinstance(item, dict) else None
+                        # 6b. Action items with late-binding speaker resolution
+                        cur.execute(
+                            "SELECT id, cluster_key, channel, display_name, person_id FROM meeting_speakers WHERE meeting_id = %s",
+                            (m_id,),
+                        )
+                        meeting_speakers_data = [
+                            {"id": row[0], "cluster_key": row[1], "channel": row[2], "display_name": row[3], "person_id": row[4]}
+                            for row in cur.fetchall()
+                        ]
+
+                        cur.execute("SELECT id, display_name, email, aliases FROM people")
+                        people_data = [
+                            {"id": row[0], "display_name": row[1], "email": row[2], "aliases": row[3] or []}
+                            for row in cur.fetchall()
+                        ]
+
+                        raw_action_items = summary_json.get("action_items") or []
+                        resolved_items = self.action_item_extractor.parse_action_items_from_summary(
+                            raw_action_items,
+                            meeting_id=m_id,
+                            meeting_date=m_created_at,
+                            speakers=meeting_speakers_data,
+                            people=people_data,
+                        )
+
+                        for ai in resolved_items:
                             cur.execute(
                                 """
-                                INSERT INTO meeting_insights (project_id, meeting_id, type, content, owner_name, status)
-                                VALUES (%s, %s, 'action_item', %s, %s, 'open')
+                                INSERT INTO meeting_insights (
+                                    project_id, meeting_id, type, content, owner_name, due_date, due_phrase,
+                                    status, assignment_type, confidence, evidence_turn_ids, dedupe_key,
+                                    assigner_speaker_id, assignee_speaker_id, assignee_person_id,
+                                    assignee_text_only, speaker_unresolved
+                                ) VALUES (
+                                    %s, %s, 'action_item', %s, %s, %s, %s,
+                                    'open', %s, %s, %s, %s,
+                                    %s, %s, %s,
+                                    %s, %s
+                                )
+                                ON CONFLICT (meeting_id, dedupe_key) WHERE type = 'action_item' AND dedupe_key IS NOT NULL
+                                DO UPDATE SET
+                                    content = EXCLUDED.content,
+                                    owner_name = COALESCE(EXCLUDED.owner_name, meeting_insights.owner_name),
+                                    due_date = COALESCE(meeting_insights.due_date, EXCLUDED.due_date),
+                                    due_phrase = EXCLUDED.due_phrase,
+                                    assignment_type = EXCLUDED.assignment_type,
+                                    confidence = EXCLUDED.confidence,
+                                    evidence_turn_ids = EXCLUDED.evidence_turn_ids,
+                                    assigner_speaker_id = EXCLUDED.assigner_speaker_id,
+                                    assignee_speaker_id = EXCLUDED.assignee_speaker_id,
+                                    assignee_person_id = EXCLUDED.assignee_person_id,
+                                    assignee_text_only = EXCLUDED.assignee_text_only,
+                                    speaker_unresolved = EXCLUDED.speaker_unresolved,
+                                    updated_at = NOW()
+                                WHERE meeting_insights.user_edited = FALSE AND meeting_insights.status = 'open'
                                 """,
-                                (project_id, m_id, text, owner),
+                                (
+                                    project_id, m_id, ai.task, ai.assignee_ref, ai.due_date, ai.due_phrase,
+                                    ai.assignment_type, ai.confidence, ai.evidence_turns, ai.dedupe_key,
+                                    ai.assigner_speaker_id, ai.assignee_speaker_id, ai.assignee_person_id,
+                                    ai.assignee_text_only, ai.speaker_unresolved
+                                ),
                             )
+
                         decisions = summary_json.get("decisions") or []
                         for dec in decisions:
                             text = dec if isinstance(dec, str) else str(dec)
