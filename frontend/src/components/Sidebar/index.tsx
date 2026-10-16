@@ -13,6 +13,7 @@ import {
   Upload,
   LogOut,
   User as UserIcon,
+  CheckSquare,
 } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSidebar } from './SidebarProvider';
@@ -60,6 +61,7 @@ const Sidebar: React.FC = () => {
 
   const isHomePage = pathname === '/';
   const isMeetingPage = pathname === '/meetings' || pathname?.includes('/meeting-details');
+  const isTasksPage = pathname === '/action-items';
   const isChatPage = pathname === '/chat';
   const isSettingsPage = pathname === '/settings';
 
@@ -157,6 +159,26 @@ const Sidebar: React.FC = () => {
             </TooltipTrigger>
             <TooltipContent side="right">
               <p>Meeting Notes {meetings.length > 0 ? `(${meetings.length})` : ''}</p>
+            </TooltipContent>
+          </Tooltip>
+
+          {/* My Tasks */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => router.push('/action-items')}
+                className={`p-2.5 rounded-xl transition-all duration-150 relative ${
+                  isTasksPage
+                    ? 'bg-indigo-50 text-indigo-600 shadow-xs'
+                    : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
+                }`}
+                aria-label="My Tasks"
+              >
+                <CheckSquare className="w-5 h-5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>My Tasks</p>
             </TooltipContent>
           </Tooltip>
 
@@ -280,6 +302,22 @@ const Sidebar: React.FC = () => {
                     {meetings.length}
                   </span>
                 )}
+              </button>
+
+              {/* My Tasks */}
+              <button
+                type="button"
+                onClick={() => router.push('/action-items')}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  isTasksPage
+                    ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <CheckSquare className={`w-4 h-4 shrink-0 ${isTasksPage ? 'text-indigo-600' : 'text-slate-500'}`} />
+                  <span>My Tasks</span>
+                </div>
               </button>
 
 

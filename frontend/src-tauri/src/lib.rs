@@ -42,6 +42,7 @@ pub mod google_drive;
 pub mod local_credentials;
 pub mod notifications;
 pub mod ollama;
+pub mod action_items;
 pub mod onboarding;
 pub mod openai;
 pub mod anthropic;
@@ -833,6 +834,13 @@ pub fn run() {
             speakers::commands::api_merge_speakers,
             speakers::commands::api_auto_link_mic_speaker,
             speakers::commands::api_list_people,
+            // Action items ("My Tasks") commands
+            action_items::commands::api_list_my_action_items,
+            action_items::commands::api_update_action_item,
+            action_items::commands::api_confirm_action_item,
+            action_items::commands::api_reject_action_item,
+            action_items::commands::api_claim_action_item,
+            action_items::commands::api_get_action_item_evidence,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

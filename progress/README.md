@@ -13,7 +13,7 @@
 | **Step 1** | **Database Schema & Late-Binding Foundation** | `people`, `meeting_speakers`, `meeting_insights` columns, `action_items_resolved` view/query | ✅ Completed | 100% |
 | **Step 2** | **Speaker Management & Rename / Merge UI** | Tauri commands for speakers, Rename dialog, Merge UI, mic cluster auto-link | ✅ Completed | 100% |
 | **Step 3** | **Structured Action Item Extraction** | Candidate detection, late-binding prompt, dedupe & validation, write pipeline | ✅ Completed | 100% |
-| **Step 4** | **"My Tasks" Page & Audio Evidence Drawer** | Next.js `/action-items` route, tabs (Open, Needs review, Done), evidence audio seek | 🟡 In Progress | 20% |
+| **Step 4** | **"My Tasks" Page & Audio Evidence Drawer** | Next.js `/action-items` route, tabs (Open, Needs review, Done), evidence audio seek | ✅ Completed | 100% |
 | **Step 5** | **sherpa-onnx Local Diarization** | Pyannote 3.0 + speaker embedding ONNX models in Rust, turn builder, echo filter | ⏳ Queued | 0% |
 | **Step 6** | **Post-Meeting Screen OCR Naming** | App adapters (Teams/Zoom/Meet), 10-30 frame seek, OS OCR, Hungarian voting | ⏳ Queued | 0% |
 | **Step 7** | **Opt-in Voice Profiles** | Centroid embedding store, cosine similarity matching for repeat attendees | ⏳ Queued | 0% |
@@ -66,19 +66,20 @@
   - Verified with comprehensive test suite (`tests/test_action_items.py`).
 
 ### Step 4: "My Tasks" Page & Audio Evidence Drawer
-- [ ] Implement Tauri commands:
-  - `api_list_my_action_items(filters, cursor)`
-  - `api_list_action_items_needing_review()`
+- [x] Implement Tauri commands:
+  - `api_list_my_action_items(tab, project_id, search)`
   - `api_update_action_item(id, patch)`
   - `api_confirm_action_item(id)`
   - `api_reject_action_item(id)`
   - `api_claim_action_item(id)`
   - `api_get_action_item_evidence(id)`
-- [ ] Build Next.js Route (`/action-items`):
-  - Tabs: `Open` · `Needs review` · `Done`
+- [x] Build Next.js Route (`/action-items`):
+  - Tabs: `Open (n)` · `Needs review (n)` · `Completed (n)`
   - Due date grouping: `Overdue`, `Today`, `This week`, `Later`, `No date`
-  - Evidence Drawer with quote, speaker label, and "Play audio from [MM:SS]"
-  - Review Card Actions: Confirm, Not mine, Claim, "Who is Speaker N?"
+  - TaskCard with optimistic toggle and meeting link
+  - ReviewCard with quick actions: Confirm, Not mine, Claim, "Who is Speaker N?"
+  - TaskDrawer (Sheet) with spoken evidence snippets, editable task/due date, and "Play at [MM:SS]"
+  - Sidebar integration with "My Tasks" item and icon
 
 ### Step 5: sherpa-onnx Local Diarization
 - [ ] Integrate `sherpa-onnx` runtime in Rust / Tauri.
