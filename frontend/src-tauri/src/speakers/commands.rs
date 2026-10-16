@@ -193,3 +193,22 @@ pub async fn api_list_people(
 
     Ok(people)
 }
+
+/// Trigger screen OCR name resolution for unresolved speaker clusters in a meeting
+#[tauri::command]
+pub async fn api_run_screen_ocr_naming<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+    meeting_id: String,
+) -> Result<usize, String> {
+    let pool = state.db_manager.pool();
+    let engine = super::ocr::OcrNamingEngine::new();
+    engine
+        .process_meeting(pool, &meeting_id, Some(&app))
+        .await
+        .map_err(|e| {
+            error!("Screen OCR naming failed: {}", e);
+            e.to_string()
+        })
+}
+

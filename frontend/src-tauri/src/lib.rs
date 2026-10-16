@@ -835,6 +835,7 @@ pub fn run() {
             speakers::commands::api_merge_speakers,
             speakers::commands::api_auto_link_mic_speaker,
             speakers::commands::api_list_people,
+            speakers::commands::api_run_screen_ocr_naming,
             // Action items ("My Tasks") commands
             action_items::commands::api_list_my_action_items,
             action_items::commands::api_update_action_item,

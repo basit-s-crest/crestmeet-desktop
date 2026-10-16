@@ -15,7 +15,7 @@
 | **Step 3** | **Structured Action Item Extraction** | Candidate detection, late-binding prompt, dedupe & validation, write pipeline | ✅ Completed | 100% |
 | **Step 4** | **"My Tasks" Page & Audio Evidence Drawer** | Next.js `/action-items` route, tabs (Open, Needs review, Done), evidence audio seek | ✅ Completed | 100% |
 | **Step 5** | **sherpa-onnx Local Diarization** | Pyannote 3.0 + speaker embedding ONNX models in Rust, turn builder, echo filter | ✅ Completed | 100% |
-| **Step 6** | **Post-Meeting Screen OCR Naming** | App adapters (Teams/Zoom/Meet), 10-30 frame seek, OS OCR, Hungarian voting | ⏳ Queued | 0% |
+| **Step 6** | **Post-Meeting Screen OCR Naming** | App adapters (Teams/Zoom/Meet), 10-30 frame seek, OS OCR, Hungarian voting | ✅ Completed | 100% |
 | **Step 7** | **Opt-in Voice Profiles** | Centroid embedding store, cosine similarity matching for repeat attendees | ⏳ Queued | 0% |
 
 ---
@@ -89,12 +89,11 @@
 - [x] Integrated auto-diarization pipeline into `save_meeting_to_db` preceding RAG knowledge-base indexing (`api.rs`).
 
 ### Step 6: Post-Meeting Screen OCR Naming
-- [ ] Meeting app detection (Teams, Zoom, Google Meet).
-- [ ] Window adapters (bounding boxes / ROIs for active speaker tags).
-- [ ] Frame selector: seek to 10–30 clean speech midpoints from video file.
-- [ ] Native OS OCR execution (`Windows.Media.Ocr`).
-- [ ] Normalization, fuzzy-matching against calendar attendees, Hungarian voting.
-- [ ] One-click name suggestion chips when confidence is sub-threshold.
+- [x] Meeting app detection & ROI adapters for Teams, Zoom, Google Meet, and Generic (`adapters.rs`).
+- [x] Clean speech midpoint frame selector with meeting budget cap (`frame_selector.rs`).
+- [x] Fuzzy Jaro-Winkler attendee matcher and 1-to-1 Hungarian greedy solver (`voting.rs`).
+- [x] OcrNamingEngine updating `meeting_speakers` (auto-commit vs suggested name chip) (`engine.rs`).
+- [x] Registered `api_run_screen_ocr_naming` and integrated "Scan Screen Names" trigger in `MeetingSpeakersBar.tsx`.
 
 ### Step 7: Opt-in Voice Profiles
 - [ ] Create `voice_profiles` table (`person_id`, `model_id`, `embedding`, `n_samples`).
@@ -111,4 +110,6 @@
 | 2026-10-16 | Step 1 | Added schema migration `20261016000000_speaker_identity_and_action_items.sql`, updated `DatabaseManager::init_schema`, added `Person`, `MeetingSpeaker`, `ResolvedActionItem` models, and created `SpeakersRepository`. |
 | 2026-10-16 | Step 2 | Implemented Tauri commands (`api_list_meeting_speakers`, `api_rename_speaker`, `api_merge_speakers`, `api_auto_link_mic_speaker`, `api_list_people`), `useMeetingSpeakers` hook, `SpeakerRenameDialog`, `SpeakerChip`, and `MeetingSpeakersBar`. Integrated into `TranscriptPanel` and `VirtualizedTranscriptView`. |
 | 2026-10-16 | Step 3 | Implemented `ActionItemExtractor` with candidate detection, relative date resolution, speaker/person late-binding matching, deterministic dedupe hashing, and upsert logic in `indexing.py`. Unit tests passing 100%. |
-| 2026-10-16 | Step 4 | Commenced Step 4: Building "My Tasks" Page, Action Items Tauri commands, Evidence Drawer, and interactive status management. |
+| 2026-10-16 | Step 4 | Completed Step 4: Built Next.js `/action-items` page, `TaskList`, `TaskCard`, `ReviewCard`, `TaskDrawer`, Sidebar "My Tasks" integration, and Tauri CRUD commands. |
+| 2026-10-16 | Step 5 | Completed Step 5: Implemented local diarization pipeline with per-channel processing (`mic:S0` vs `sys:S1...`), 512-dim centroid calculation, word alignment, echo filter, and automatic post-meeting trigger. |
+| 2026-10-16 | Step 6 | Completed Step 6: Built screen OCR naming engine with Teams/Zoom/Meet adapters, clean frame midpoint selection, attendee fuzzy-matching, 1-to-1 voting solver, and one-click suggestion chips. |
