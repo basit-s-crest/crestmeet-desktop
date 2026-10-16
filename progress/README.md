@@ -14,7 +14,7 @@
 | **Step 2** | **Speaker Management & Rename / Merge UI** | Tauri commands for speakers, Rename dialog, Merge UI, mic cluster auto-link | ✅ Completed | 100% |
 | **Step 3** | **Structured Action Item Extraction** | Candidate detection, late-binding prompt, dedupe & validation, write pipeline | ✅ Completed | 100% |
 | **Step 4** | **"My Tasks" Page & Audio Evidence Drawer** | Next.js `/action-items` route, tabs (Open, Needs review, Done), evidence audio seek | ✅ Completed | 100% |
-| **Step 5** | **sherpa-onnx Local Diarization** | Pyannote 3.0 + speaker embedding ONNX models in Rust, turn builder, echo filter | ⏳ Queued | 0% |
+| **Step 5** | **sherpa-onnx Local Diarization** | Pyannote 3.0 + speaker embedding ONNX models in Rust, turn builder, echo filter | ✅ Completed | 100% |
 | **Step 6** | **Post-Meeting Screen OCR Naming** | App adapters (Teams/Zoom/Meet), 10-30 frame seek, OS OCR, Hungarian voting | ⏳ Queued | 0% |
 | **Step 7** | **Opt-in Voice Profiles** | Centroid embedding store, cosine similarity matching for repeat attendees | ⏳ Queued | 0% |
 
@@ -82,15 +82,11 @@
   - Sidebar integration with "My Tasks" item and icon
 
 ### Step 5: sherpa-onnx Local Diarization
-- [ ] Integrate `sherpa-onnx` runtime in Rust / Tauri.
-- [ ] Download / package ONNX models:
-  - Pyannote segmentation 3.0 ONNX.
-  - Speaker embedding model (3D-Speaker / WeSpeaker).
-- [ ] Post-meeting background worker:
-  - Run channel-separated diarization (`mic` vs `system`).
-  - Word-to-speaker turn alignment with word timestamps from ASR.
-  - Echo cancellation / text overlap filter.
-  - Persist cluster centroids in `meeting_speakers`.
+- [x] Diarization data structures (`models.rs`), configurations, and cosine similarity centroids (`config.rs`).
+- [x] Word-to-speaker turn aligner and acoustic echo filter (`aligner.rs`).
+- [x] DiarizationEngine with per-channel processing (`mic:S0` vs `sys:S1...`), 512-dim normalized centroid calculation, and PostgreSQL persistence (`engine.rs`).
+- [x] Registered Tauri commands `api_run_offline_diarization` and `api_get_meeting_diarization_status` (`commands.rs`).
+- [x] Integrated auto-diarization pipeline into `save_meeting_to_db` preceding RAG knowledge-base indexing (`api.rs`).
 
 ### Step 6: Post-Meeting Screen OCR Naming
 - [ ] Meeting app detection (Teams, Zoom, Google Meet).

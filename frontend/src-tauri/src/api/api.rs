@@ -1247,9 +1247,18 @@ pub async fn api_save_transcript<R: Runtime>(
                 resolved_project_id
             );
 
-            // Auto-trigger RAG knowledge base indexing in background
+            // Post-meeting offline diarization pipeline + RAG indexing in background
             let mid_clone = meeting_id.clone();
+            let pool_clone = pool.clone();
+            let app_clone = app.clone();
             tokio::spawn(async move {
+                // 1. Run local offline diarization (pyannote/sherpa-onnx) & late-binding speaker assignment
+                let diarizer = crate::diarization::DiarizationEngine::with_default_config();
+                if let Err(e) = diarizer.process_meeting(&pool_clone, &mid_clone, Some(&app_clone)).await {
+                    tracing::warn!("Post-meeting diarization failed for {}: {}", mid_clone, e);
+                }
+
+                // 2. Trigger RAG knowledge base indexing and late-bound action item extraction
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(5))
                     .build();

@@ -178,4 +178,67 @@ impl SpeakersRepository {
 
         Ok(updated)
     }
+
+    /// Upsert a speaker cluster produced by the diarization pipeline
+    /// Preserves manual renames and manually linked persons on conflict
+    pub async fn upsert_speaker_cluster(
+        pool: &PgPool,
+        meeting_id: &str,
+        cluster_key: &str,
+        channel: &str,
+        display_name: Option<&str>,
+        embedding: Option<&[f32]>,
+        embedding_model: Option<&str>,
+    ) -> Result<MeetingSpeaker, SqlxError> {
+        let speaker = sqlx::query_as::<_, MeetingSpeaker>(
+            "INSERT INTO meeting_speakers (
+                meeting_id, cluster_key, channel, display_name, name_source, name_confidence, embedding, embedding_model, created_at, updated_at
+             )
+             VALUES ($1, $2, $3, $4, 'diarization', 0.85, $5, $6, NOW(), NOW())
+             ON CONFLICT (meeting_id, cluster_key) DO UPDATE
+             SET embedding = COALESCE(EXCLUDED.embedding, meeting_speakers.embedding),
+                 embedding_model = COALESCE(EXCLUDED.embedding_model, meeting_speakers.embedding_model),
+                 display_name = CASE 
+                     WHEN meeting_speakers.name_source = 'manual' THEN meeting_speakers.display_name
+                     ELSE COALESCE(meeting_speakers.display_name, EXCLUDED.display_name)
+                 END,
+                 updated_at = NOW()
+             RETURNING id, meeting_id, cluster_key, channel, person_id, display_name,
+                       name_source, name_confidence, suggested_name, embedding, embedding_model,
+                       created_at, updated_at",
+        )
+        .bind(meeting_id)
+        .bind(cluster_key)
+        .bind(channel)
+        .bind(display_name)
+        .bind(embedding)
+        .bind(embedding_model)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(speaker)
+    }
+
+    /// Link a transcript segment to a resolved speaker cluster
+    pub async fn update_transcript_speaker(
+        pool: &PgPool,
+        transcript_id: &str,
+        speaker_id: Uuid,
+        speaker_confidence: f32,
+    ) -> Result<(), SqlxError> {
+        sqlx::query(
+            "UPDATE transcripts
+             SET speaker_id = $1,
+                 speaker_confidence = $2
+             WHERE id = $3",
+        )
+        .bind(speaker_id)
+        .bind(speaker_confidence)
+        .bind(transcript_id)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
 }
+

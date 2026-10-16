@@ -43,6 +43,7 @@ pub mod local_credentials;
 pub mod notifications;
 pub mod ollama;
 pub mod action_items;
+pub mod diarization;
 pub mod onboarding;
 pub mod openai;
 pub mod anthropic;
@@ -841,6 +842,9 @@ pub fn run() {
             action_items::commands::api_reject_action_item,
             action_items::commands::api_claim_action_item,
             action_items::commands::api_get_action_item_evidence,
+            // Offline Diarization commands
+            diarization::commands::api_run_offline_diarization,
+            diarization::commands::api_get_meeting_diarization_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
