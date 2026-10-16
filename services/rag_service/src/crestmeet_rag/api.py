@@ -1,8 +1,9 @@
-"""FastAPI HTTP service for CrestMeet RAG."""
+"""FastAPI HTTP service for CrestMeet RAG, OCR, and Pyannote Model Verification."""
 
 from typing import List
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from crestmeet_rag.chunking.chunker import SpeakerTurnChunker
 from crestmeet_rag.embeddings.embedder import LocalEmbedder
@@ -13,11 +14,29 @@ from crestmeet_rag.models.schemas import (
     EmbedResponse,
     KnowledgeChunk,
 )
+from crestmeet_rag.ocr.router import router as ocr_router
+from crestmeet_rag.pyannote.router import router as pyannote_router
+
+tags_metadata = [
+    {
+        "name": "OCR & Screen Speaker Recognition",
+        "description": "Verify screen OCR name extraction, app layout adapters (Teams, Zoom, Google Meet), attendee fuzzy matching, and Hungarian 1-to-1 voting solver.",
+    },
+    {
+        "name": "Pyannote Diarization & Speaker Verification",
+        "description": "Test Pyannote 3.0 audio segmentation / VAD, WeSpeaker 512-dimensional speaker embeddings, cosine similarity, and multi-turn meeting diarization.",
+    },
+    {
+        "name": "RAG & Knowledge Chunking",
+        "description": "Core speaker-turn chunking and FastEmbed ONNX embedding pipeline for meeting transcripts.",
+    },
+]
 
 app = FastAPI(
-    title="CrestMeet RAG Service",
-    description="Local service for transcript chunking and ONNX embeddings",
-    version="0.1.0",
+    title="CrestMeet Backend & Model Verification Service",
+    description="Local service for testing and verifying OCR screen recognition, Pyannote diarization, speaker verification, and RAG chunking.",
+    version="0.2.0",
+    openapi_tags=tags_metadata,
 )
 
 app.add_middleware(
@@ -28,20 +47,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount verification routers
+app.include_router(ocr_router)
+app.include_router(pyannote_router)
+
 chunker = SpeakerTurnChunker()
 embedder = LocalEmbedder()
 
 
-@app.get("/health")
+@app.get("/", include_in_schema=False)
+def root():
+    """Redirect root to OpenAPI interactive Swagger documentation."""
+    return RedirectResponse(url="/docs")
+
+
+@app.get("/health", tags=["RAG & Knowledge Chunking"])
 def health():
     return {
         "status": "healthy",
         "embedding_model": embedder.model_tag,
         "dimension": embedder.dimension,
+        "ocr_available": True,
+        "pyannote_available": True,
     }
 
 
-@app.post("/chunk", response_model=ChunkResponse)
+@app.post("/chunk", response_model=ChunkResponse, tags=["RAG & Knowledge Chunking"])
 def chunk_transcript(request: ChunkRequest):
     try:
         chunks = chunker.chunk_meeting(request)
@@ -54,7 +85,7 @@ def chunk_transcript(request: ChunkRequest):
         raise HTTPException(status_code=500, detail=f"Chunking error: {str(e)}")
 
 
-@app.post("/embed", response_model=EmbedResponse)
+@app.post("/embed", response_model=EmbedResponse, tags=["RAG & Knowledge Chunking"])
 def embed_texts(request: EmbedRequest):
     try:
         model_tag, dimension, embeddings = embedder.embed_texts(request.texts)
@@ -67,7 +98,7 @@ def embed_texts(request: EmbedRequest):
         raise HTTPException(status_code=500, detail=f"Embedding error: {str(e)}")
 
 
-@app.post("/process-meeting", response_model=List[KnowledgeChunk])
+@app.post("/process-meeting", response_model=List[KnowledgeChunk], tags=["RAG & Knowledge Chunking"])
 def process_meeting(request: ChunkRequest):
     """
     Combined pipeline:
@@ -97,7 +128,7 @@ def process_meeting(request: ChunkRequest):
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 
-@app.post("/index-meeting/{meeting_id}")
+@app.post("/index-meeting/{meeting_id}", tags=["RAG & Knowledge Chunking"])
 def trigger_index_meeting(meeting_id: str):
     """Trigger background indexing for a single meeting."""
     try:
@@ -112,4 +143,3 @@ def trigger_index_meeting(meeting_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("crestmeet_rag.api:app", host="127.0.0.1", port=8123, reload=False)
-
