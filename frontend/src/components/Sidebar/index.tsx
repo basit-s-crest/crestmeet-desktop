@@ -175,10 +175,13 @@ const Sidebar: React.FC = () => {
                 aria-label="My Tasks"
               >
                 <CheckSquare className="w-5 h-5" />
+                <span className="absolute -top-1 -right-1 text-[8px] font-semibold px-1 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200/80 leading-none">
+                  Beta
+                </span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
-              <p>My Tasks</p>
+              <p>My Tasks (Beta)</p>
             </TooltipContent>
           </Tooltip>
 
@@ -318,6 +321,9 @@ const Sidebar: React.FC = () => {
                   <CheckSquare className={`w-4 h-4 shrink-0 ${isTasksPage ? 'text-indigo-600' : 'text-slate-500'}`} />
                   <span>My Tasks</span>
                 </div>
+                <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-amber-100 text-amber-800 border border-amber-200/80">
+                  Beta
+                </span>
               </button>
 
 
