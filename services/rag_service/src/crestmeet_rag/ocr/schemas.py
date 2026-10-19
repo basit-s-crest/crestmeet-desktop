@@ -49,6 +49,9 @@ class OcrRecognizeResponse(BaseModel):
     combined_score: float = 0.0
     should_auto_commit: bool = False
     suggested_chip: Optional[str] = None
+    active_speaker_detected: bool = False
+    active_speaker_name: Optional[str] = None
+    all_grid_names: List[str] = Field(default_factory=list)
 
 
 class FuzzyMatchRequest(BaseModel):

@@ -23,7 +23,8 @@ ocr_engine = ScreenOcrEngine()
 
 @router.get("/status")
 def get_ocr_status():
-    """Check OCR engine capability and Windows.Media.Ocr status."""
+    """Check OCR engine capability, RapidOCR, and Windows.Media.Ocr status."""
+    is_rapid = ocr_engine.is_rapid_ocr_available
     is_native = ocr_engine.is_native_windows_ocr_available
     lang = None
     if is_native and ocr_engine.winrt_engine:
@@ -34,9 +35,11 @@ def get_ocr_status():
 
     return {
         "status": "online",
-        "engine": "Windows.Media.Ocr (Native WinRT)" if is_native else "Fallback Pattern Engine",
+        "engine": ocr_engine.engine_name,
+        "rapid_ocr_available": is_rapid,
         "native_windows_media_ocr": is_native,
         "recognizer_language": lang,
+        "active_speaker_border_detection": True,
         "supported_app_presets": [p.value for p in AppPreset],
     }
 
@@ -64,46 +67,21 @@ async def recognize_ocr_upload(
 ):
     """
     Test OCR by directly uploading an image file from Swagger UI.
-    Extracts text, strips role tokens, and matches with calendar attendees.
+    Detects active speaker colored highlight border, extracts all participant
+    names in the grid, and fuzzy-matches against calendar attendees.
     """
     try:
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-        # Determine ROI and crop
-        roi = APP_ROI_PRESETS.get(app_preset, APP_ROI_PRESETS[AppPreset.GENERIC])
-        cropped = ocr_engine.crop_roi(image, roi)
-
-        raw_text, lines, ocr_conf = ocr_engine.run_ocr_on_pil_image(cropped)
-        if not raw_text.strip():
-            raw_text, lines, ocr_conf = ocr_engine.run_ocr_on_pil_image(image)
-
-        cleaned_name = ocr_engine.clean_name(raw_text)
-
         attendee_list = []
         if attendees:
             attendee_list = [a.strip() for a in attendees.split(",") if a.strip()]
 
-        matched_attendee = None
-        similarity_score = 0.0
-        if attendee_list and cleaned_name:
-            matched_attendee, similarity_score, _ = fuzzy_match_attendees(
-                cleaned_name, attendee_list, min_similarity=0.55
-            )
-
-        combined_score = round(ocr_conf * (similarity_score if matched_attendee else 0.8), 4)
-
-        return OcrRecognizeResponse(
-            app_preset=app_preset.value,
-            raw_full_text=raw_text,
-            detected_lines=lines,
-            cleaned_name=cleaned_name,
-            matched_attendee=matched_attendee,
-            similarity_score=similarity_score,
-            ocr_confidence=round(ocr_conf, 4),
-            combined_score=combined_score,
-            should_auto_commit=combined_score >= 0.70 and matched_attendee is not None,
-            suggested_chip=matched_attendee or (cleaned_name if len(cleaned_name) >= 3 else None),
+        return ocr_engine.process_pil_image(
+            image=image,
+            app_preset=app_preset,
+            attendee_names=attendee_list,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process uploaded image: {str(e)}")
