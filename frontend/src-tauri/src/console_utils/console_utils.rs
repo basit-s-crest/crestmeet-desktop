@@ -32,7 +32,7 @@ pub fn show_console() -> Result<String, String> {
             }
             // Reinitialize stdout, stdin, stderr for the new console
             std::env::set_var("RUST_LOG", "info");
-            env_logger::init();
+            let _ = env_logger::try_init();
         } else {
             // Show existing console window
             ShowWindow(console_window, SW_SHOW);
