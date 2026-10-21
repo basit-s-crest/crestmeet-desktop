@@ -52,7 +52,13 @@ impl OcrNamingEngine {
             .filter(|s| {
                 s.channel != "mic" // mic is already linked to user
                     && s.name_source.as_deref() != Some("manual")
-                    && (s.display_name.is_none() || s.name_confidence.unwrap_or(0.0) < 0.70)
+                    && s.name_source.as_deref() != Some("ocr")
+                    && (
+                        s.display_name.is_none()
+                            || s.name_source.as_deref() == Some("channel")
+                            || s.display_name.as_deref().unwrap_or("").starts_with("Speaker ")
+                            || s.name_confidence.unwrap_or(0.0) < 0.70
+                    )
             })
             .map(|s| s.cluster_key.clone())
             .collect();
@@ -70,9 +76,14 @@ impl OcrNamingEngine {
         .await
         .unwrap_or_default();
 
+        // Strictly filter out local user identifiers ("You", "Me", empty) per Section 4.5 of plan
         let attendee_names: Vec<String> = people
             .iter()
             .map(|p| p.display_name.clone())
+            .filter(|name| {
+                let lower = name.trim().to_lowercase();
+                lower != "you" && lower != "me" && !lower.is_empty()
+            })
             .collect();
 
         // 3. Gather transcript speech segments for timing
@@ -116,24 +127,10 @@ impl OcrNamingEngine {
             unresolved_clusters.len()
         );
 
-        // 5. In simulated/desktop environment, match clean candidate speech observations
-        let mut observations: Vec<OcrObservation> = Vec::new();
-        for target in &frame_targets {
-            // Find best matching candidate name from known attendees if available
-            for attendee in &attendee_names {
-                let sim = 0.85f32; // high-quality observation
-                observations.push(OcrObservation {
-                    cluster_key: target.cluster_key.clone(),
-                    raw_text: attendee.clone(),
-                    candidate_name: attendee.clone(),
-                    ocr_confidence: 0.90,
-                    match_similarity: sim,
-                    segment_purity: 0.95,
-                    timestamp: target.seek_seconds,
-                });
-                break; // Take primary match per target
-            }
-        }
+        // 5. Gather real OCR observations from screen/video frames
+        // In the absence of live vision OCR extraction on video frames, observations remain empty
+        // so no false commitments or mock names are invented.
+        let observations: Vec<OcrObservation> = Vec::new();
 
         // 6. Vote and enforce 1-to-1 assignment
         let decisions = self.voting.resolve_decisions(&observations, &unresolved_clusters);

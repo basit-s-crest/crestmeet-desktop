@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Transcript, MeetingMetadata, PaginatedTranscriptsResponse, TranscriptSegmentData } from "@/types";
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -40,6 +41,7 @@ function convertTranscriptsToSegments(transcripts: Transcript[]): TranscriptSegm
         speakerId: t.speaker_id,
         speakerName: t.speaker_name,
         speakerChannel: t.speaker_channel,
+        clusterKey: t.cluster_key,
     }));
 }
 
@@ -194,6 +196,24 @@ export function usePaginatedTranscripts({
 
         loadInitial();
     }, [meetingId, reset, loadMetadata, loadTranscriptsAtOffset]);
+
+    // Listen for speaker updates (post-meeting diarization, OCR naming, manual renames)
+    useEffect(() => {
+        if (!meetingId) return;
+
+        let unlisten: (() => void) | undefined;
+        listen<{ meeting_id?: string }>('speakers-updated', (event) => {
+            if (!event.payload?.meeting_id || event.payload.meeting_id === meetingId) {
+                console.log('🔄 Speakers updated for meeting, reloading transcripts:', meetingId);
+                loadTranscriptsAtOffset(0, false);
+                loadMetadata();
+            }
+        }).then(fn => { unlisten = fn; });
+
+        return () => {
+            if (unlisten) unlisten();
+        };
+    }, [meetingId, loadTranscriptsAtOffset, loadMetadata]);
 
     // Convert to segments (memoized)
     const segments = useMemo(() =>

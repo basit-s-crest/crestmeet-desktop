@@ -61,12 +61,23 @@ impl TranscriptsRepository {
 
         info!("Successfully created meeting with id: {}, project: {:?}", meeting_id, project_id);
 
-        // 2. Save each transcript segment with audio timing fields and project_id
+        // 2. Save each transcript segment with audio timing fields, speaker channel, and project_id
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
+            let speaker_channel = segment.speaker_channel.as_deref()
+                .or(segment.speaker.as_deref())
+                .unwrap_or_else(|| {
+                    let name_lower = segment.speaker_name.as_deref().unwrap_or("").to_lowercase();
+                    if name_lower.contains("you") || name_lower.contains("mic") {
+                        "mic"
+                    } else {
+                        "system"
+                    }
+                });
+
             let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, user_id, project_id)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, user_id, project_id, speaker)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
             )
             .bind(&transcript_id)
             .bind(&meeting_id)
@@ -77,6 +88,7 @@ impl TranscriptsRepository {
             .bind(segment.duration)
             .bind(user_id)
             .bind(project_id)
+            .bind(speaker_channel)
             .execute(&mut *transaction)
             .await;
 

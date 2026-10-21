@@ -47,8 +47,8 @@ impl DiarizationEngine {
         }
 
         // 1. Fetch transcript segments for this meeting from database
-        let rows: Vec<(String, String, Option<f64>, Option<f64>, Option<Uuid>)> = sqlx::query_as(
-            "SELECT id, transcript, audio_start_time, audio_end_time, speaker_id 
+        let rows: Vec<(String, String, Option<f64>, Option<f64>, Option<Uuid>, Option<String>)> = sqlx::query_as(
+            "SELECT id, transcript, audio_start_time, audio_end_time, speaker_id, speaker 
              FROM transcripts 
              WHERE meeting_id = $1 
              ORDER BY COALESCE(audio_start_time, 0.0) ASC",
@@ -69,26 +69,45 @@ impl DiarizationEngine {
         }
 
         let mut raw_turns: Vec<RawTranscriptTurn> = Vec::new();
-        for (i, (t_id, transcript, audio_start, audio_end, _)) in rows.iter().enumerate() {
+        for (i, (t_id, transcript, audio_start, audio_end, _, speaker_col)) in rows.iter().enumerate() {
             let start = audio_start.unwrap_or(i as f64 * 3.0);
             let end = audio_end.unwrap_or(start + 3.0);
 
-            // Channel heuristic: detect if segment text starts with "[Mic]" or "[Sys]" or "Me:"
-            let (channel, cleaned_text) = if transcript.starts_with("[Mic]") || transcript.starts_with("Me:") {
-                ("mic".to_string(), transcript.trim_start_matches("[Mic]").trim_start_matches("Me:").trim().to_string())
+            // Channel detection: use stored speaker column, falling back to prefix heuristics
+            let channel = if let Some(spk) = speaker_col.as_deref() {
+                if spk.eq_ignore_ascii_case("mic") { "mic".to_string() } else { "system".to_string() }
+            } else if transcript.starts_with("[Mic]") || transcript.starts_with("Me:") {
+                "mic".to_string()
             } else if transcript.starts_with("[Sys]") || transcript.starts_with("System:") {
-                ("system".to_string(), transcript.trim_start_matches("[Sys]").trim_start_matches("System:").trim().to_string())
+                "system".to_string()
             } else {
-                ("system".to_string(), transcript.clone())
+                "system".to_string()
             };
+
+            let cleaned_text = transcript
+                .trim_start_matches("[Mic]")
+                .trim_start_matches("[Sys]")
+                .trim_start_matches("Me:")
+                .trim_start_matches("System:")
+                .trim()
+                .to_string();
 
             raw_turns.push(RawTranscriptTurn {
                 id: t_id.clone(),
-                text: cleaned_text,
+                text: if cleaned_text.is_empty() { transcript.clone() } else { cleaned_text },
                 start_time: start,
                 end_time: end,
                 channel: Some(channel),
             });
+        }
+
+        // 1b. Heal acoustic bleed turns:
+        // Turns stamped as 'mic' that occur after user mic speech has stopped and directly
+        // abut or overlap system audio are bleeding through laptop speakers into the microphone.
+        // We re-tag their channel to "system" so they stay in their true system speaker cluster.
+        let healed_turns = heal_acoustic_bleed(&mut raw_turns);
+        if healed_turns > 0 {
+            info!("🩹 Healed {} acoustic bleed turns from mic -> system", healed_turns);
         }
 
         if let Some(app_handle) = app {
@@ -99,63 +118,67 @@ impl DiarizationEngine {
             }));
         }
 
-        // 2. Partition turns into Mic and System channels
+        // 2. Cluster turns into Mic (mic:S0) and System (sys:S1, sys:S2...) channels in chronological order
         let mut diarized_segments: Vec<DiarizedSegment> = Vec::new();
         let mut cluster_embeddings: HashMap<String, Vec<Vec<f32>>> = HashMap::new();
 
-        // Mic channel: dominant speaker is mic:S0 (user)
-        for turn in raw_turns.iter().filter(|t| t.channel.as_deref() == Some("mic")) {
-            let cluster_key = "mic:S0".to_string();
-            let embedding = generate_synthetic_feature_embedding(&turn.text, 0);
-
-            cluster_embeddings
-                .entry(cluster_key.clone())
-                .or_default()
-                .push(embedding.clone());
-
-            diarized_segments.push(DiarizedSegment {
-                start_time: turn.start_time,
-                end_time: turn.end_time,
-                cluster_key,
-                channel: "mic".to_string(),
-                confidence: 0.95,
-                embedding: Some(embedding),
-            });
-        }
-
-        // System channel: cluster into sys:S1, sys:S2... based on speech segment boundaries and embeddings
-        let sys_turns: Vec<&RawTranscriptTurn> = raw_turns
-            .iter()
-            .filter(|t| t.channel.as_deref() != Some("mic"))
-            .collect();
-
         let mut current_sys_cluster_idx = 1;
-        let mut last_end_time = -100.0;
+        let mut last_sys_end_time = -100.0;
+        let mut user_spoke_since_last_sys = false;
 
-        for turn in sys_turns {
-            // If pause between system turns > 4 seconds, consider speaker shift
-            if turn.start_time - last_end_time > 4.0 && last_end_time > 0.0 {
-                // Alternate between speaker clusters or create new cluster up to 3 speakers
-                current_sys_cluster_idx = if current_sys_cluster_idx == 1 { 2 } else { 1 };
+        for turn in &raw_turns {
+            let is_mic = turn.channel.as_deref() == Some("mic");
+
+            if is_mic {
+                // User microphone speech: belongs to user cluster mic:S0
+                let cluster_key = "mic:S0".to_string();
+                let embedding = generate_synthetic_feature_embedding(&turn.text, 0);
+
+                cluster_embeddings
+                    .entry(cluster_key.clone())
+                    .or_default()
+                    .push(embedding.clone());
+
+                diarized_segments.push(DiarizedSegment {
+                    start_time: turn.start_time,
+                    end_time: turn.end_time,
+                    cluster_key,
+                    channel: "mic".to_string(),
+                    confidence: 0.95,
+                    embedding: Some(embedding),
+                });
+
+                user_spoke_since_last_sys = true;
+            } else {
+                // Remote system audio speech: check for speaker/video shift
+                if last_sys_end_time > 0.0 {
+                    let pause_gap = turn.start_time - last_sys_end_time;
+                    // Speaker shift: user spoke on mic in between OR there was a major silence gap (>= 6.5s)
+                    if user_spoke_since_last_sys || pause_gap >= 6.5 {
+                        current_sys_cluster_idx += 1;
+                        user_spoke_since_last_sys = false;
+                    }
+                }
+
+                last_sys_end_time = turn.end_time;
+
+                let cluster_key = format!("sys:S{}", current_sys_cluster_idx);
+                let embedding = generate_synthetic_feature_embedding(&turn.text, current_sys_cluster_idx);
+
+                cluster_embeddings
+                    .entry(cluster_key.clone())
+                    .or_default()
+                    .push(embedding.clone());
+
+                diarized_segments.push(DiarizedSegment {
+                    start_time: turn.start_time,
+                    end_time: turn.end_time,
+                    cluster_key,
+                    channel: "system".to_string(),
+                    confidence: 0.85,
+                    embedding: Some(embedding),
+                });
             }
-            last_end_time = turn.end_time;
-
-            let cluster_key = format!("sys:S{}", current_sys_cluster_idx);
-            let embedding = generate_synthetic_feature_embedding(&turn.text, current_sys_cluster_idx);
-
-            cluster_embeddings
-                .entry(cluster_key.clone())
-                .or_default()
-                .push(embedding.clone());
-
-            diarized_segments.push(DiarizedSegment {
-                start_time: turn.start_time,
-                end_time: turn.end_time,
-                cluster_key,
-                channel: "system".to_string(),
-                confidence: 0.85,
-                embedding: Some(embedding),
-            });
         }
 
         if let Some(app_handle) = app {
@@ -222,14 +245,15 @@ impl DiarizationEngine {
             cluster_id_map.insert(cluster.cluster_key.clone(), speaker.id);
         }
 
-        // 6. Update transcripts with speaker_id and confidence
+        // 6. Update transcripts with speaker_id, confidence, and healed channel
         for turn in &aligned_turns {
             if let Some(speaker_id) = cluster_id_map.get(&turn.cluster_key) {
-                if let Err(e) = SpeakersRepository::update_transcript_speaker(
+                if let Err(e) = SpeakersRepository::update_transcript_speaker_and_channel(
                     pool,
                     &turn.id,
                     *speaker_id,
                     turn.speaker_confidence,
+                    &turn.channel,
                 )
                 .await
                 {
@@ -315,3 +339,88 @@ fn generate_synthetic_feature_embedding(text: &str, seed: usize) -> Vec<f32> {
 
     vec
 }
+
+/// Heals acoustic bleed turns: speech detected on the microphone channel that is actually
+/// coming from the laptop speakers playing system audio (e.g. YouTube videos, Zoom/Teams calls).
+/// CRITICAL: Concluding user speech at the end of the meeting is NEVER touched and strictly preserved as "mic".
+fn heal_acoustic_bleed(raw_turns: &mut [RawTranscriptTurn]) -> usize {
+    if raw_turns.is_empty() {
+        return 0;
+    }
+
+    // Sort turns chronologically
+    raw_turns.sort_by(|a, b| a.start_time.partial_cmp(&b.start_time).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut healed_count = 0;
+    let n = raw_turns.len();
+
+    // Timestamp of the latest system audio turn in the entire meeting
+    let last_sys_end_time = raw_turns
+        .iter()
+        .filter(|t| t.channel.as_deref() == Some("system"))
+        .map(|t| t.end_time)
+        .fold(0.0f64, f64::max);
+
+    for i in 0..n {
+        let is_mic = raw_turns[i].channel.as_deref() == Some("mic");
+        let start = raw_turns[i].start_time;
+        let end = raw_turns[i].end_time;
+
+        if !is_mic {
+            continue;
+        }
+
+        // CRITICAL: Any speech starting after or around the last system audio finished is the user
+        // speaking/concluding the meeting. It must NEVER be treated as acoustic bleed!
+        if last_sys_end_time > 0.0 && start >= last_sys_end_time - 0.5 {
+            continue;
+        }
+
+        // Check if there is an active system audio turn immediately following this chunk within 2.5s
+        let mut following_system = false;
+        for j in (i + 1)..n.min(i + 3) {
+            if raw_turns[j].channel.as_deref() == Some("system") {
+                let sys_start = raw_turns[j].start_time;
+                if sys_start >= end - 0.5 && sys_start - end <= 2.5 {
+                    following_system = true;
+                }
+                break;
+            } else if raw_turns[j].channel.as_deref() == Some("mic") {
+                // If followed by another mic turn, this is a human speaking sequence!
+                break;
+            }
+        }
+
+        // Check if there is a preceding system turn within 2.5s
+        let mut preceding_system = false;
+        for j in (0..i).rev().take(3) {
+            if raw_turns[j].channel.as_deref() == Some("system") {
+                let sys_end = raw_turns[j].end_time;
+                if start >= sys_end - 0.5 && start - sys_end <= 2.5 {
+                    preceding_system = true;
+                }
+                break;
+            }
+        }
+
+        // Acoustic bleed only occurs while system audio is actively playing:
+        // either directly followed by system audio, or embedded within ongoing system playback
+        let is_bleed = following_system || (preceding_system && start < last_sys_end_time - 3.0);
+
+        if is_bleed {
+            // Also ensure it is not followed by multiple user mic turns
+            let followed_by_mic_turns = i + 1 < n && raw_turns[i + 1].channel.as_deref() == Some("mic");
+            if !followed_by_mic_turns {
+                info!(
+                    "🩹 Healed acoustic bleed turn '{}' [{:.2}s - {:.2}s]: mic -> system",
+                    raw_turns[i].text, start, end
+                );
+                raw_turns[i].channel = Some("system".to_string());
+                healed_count += 1;
+            }
+        }
+    }
+
+    healed_count
+}
+

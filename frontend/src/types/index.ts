@@ -19,6 +19,8 @@ export interface Transcript {
   speaker_id?: string;
   speaker_name?: string;
   speaker_channel?: 'mic' | 'system';
+  speaker?: string;
+  cluster_key?: string;
 }
 
 
@@ -148,6 +150,7 @@ export interface TranscriptSegmentData {
   speakerId?: string;
   speakerName?: string;
   speakerChannel?: 'mic' | 'system';
+  clusterKey?: string;
 }
 
 export interface MeetingSpeaker {

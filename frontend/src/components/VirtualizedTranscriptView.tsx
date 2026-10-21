@@ -8,13 +8,16 @@ import { ConfidenceIndicator } from "./ConfidenceIndicator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
-import { TranscriptSegmentData } from "@/types";
+import { TranscriptSegmentData, MeetingSpeaker } from "@/types";
 import { listen } from "@tauri-apps/api/event";
 import { SpeakerChip } from "./Speakers/SpeakerChip";
+import { User } from "lucide-react";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
     segments: TranscriptSegmentData[];
+    /** Speaker lookup dictionary for instant name synchronization */
+    speakersById?: Record<string, MeetingSpeaker>;
     /** Whether recording is in progress */
     isRecording?: boolean;
     /** Whether recording is paused */
@@ -137,7 +140,8 @@ export function groupSegmentsIntoTurns(
     segments: TranscriptSegmentData[],
     highlightedSegmentId: string | null,
     streamingSegmentId: string | null,
-    getDisplayText: (seg: TranscriptSegmentData) => string
+    getDisplayText: (seg: TranscriptSegmentData) => string,
+    speakersById?: Record<string, MeetingSpeaker>
 ): SpeakerTurn[] {
     const turns: SpeakerTurn[] = [];
     if (!segments || segments.length === 0) return turns;
@@ -147,16 +151,30 @@ export function groupSegmentsIntoTurns(
     for (const seg of segments) {
         const isMic = seg.speakerChannel === 'mic' ||
             (seg.speakerName?.toLowerCase().includes('you') || seg.speakerName?.toLowerCase().includes('mic'));
-        const channel: 'mic' | 'system' = isMic ? 'mic' : 'system';
-        const defaultName = isMic ? 'You (Microphone)' : 'Speaker 1';
-        const name = seg.speakerName?.trim() || defaultName;
+
+        // Look up speaker from registry if available for instantaneous synchronization
+        const speakerIdKey = seg.speakerId?.trim() || undefined;
+        const clusterKey = seg.clusterKey?.trim() || undefined;
+        const resolvedSpeaker: MeetingSpeaker | undefined =
+            (speakerIdKey ? speakersById?.[speakerIdKey] : undefined) ||
+            (clusterKey ? speakersById?.[clusterKey] : undefined);
+        const channel: 'mic' | 'system' = (resolvedSpeaker?.channel as 'mic' | 'system') || (isMic ? 'mic' : 'system');
+        const defaultName = channel === 'mic'
+            ? 'You'
+            : seg.clusterKey && seg.clusterKey.startsWith('sys:S')
+            ? `Speaker ${seg.clusterKey.replace('sys:S', '')}`
+            : 'Speaker 1';
+        const name = resolvedSpeaker?.display_name || seg.speakerName?.trim() || defaultName;
 
         const isSegHighlighted = Boolean(highlightedSegmentId && (highlightedSegmentId === seg.id || highlightedSegmentId === `seg_${seg.id}`));
         const isSegStreaming = Boolean(streamingSegmentId && streamingSegmentId === seg.id);
         const segRawText = getDisplayText(seg);
         const segText = cleanStopWords(segRawText).trim();
 
-        if (currentTurn && currentTurn.speakerName === name && currentTurn.speakerChannel === channel) {
+        const speechPause = currentTurn && seg.timestamp ? seg.timestamp - (currentTurn.endTime ?? currentTurn.timestamp) : 0;
+        const isWithinTurnWindow = speechPause < 12.0;
+
+        if (currentTurn && currentTurn.speakerName === name && currentTurn.speakerChannel === channel && isWithinTurnWindow) {
             currentTurn.segmentIds.push(seg.id);
             if (seg.endTime) {
                 currentTurn.endTime = seg.endTime;
@@ -175,7 +193,7 @@ export function groupSegmentsIntoTurns(
                 id: `turn-${seg.id}`,
                 speakerName: name,
                 speakerChannel: channel,
-                speakerId: seg.speakerId,
+                speakerId: seg.speakerId || seg.clusterKey,
                 timestamp: seg.timestamp ?? 0,
                 endTime: seg.endTime,
                 text: segText,
@@ -191,10 +209,9 @@ export function groupSegmentsIntoTurns(
     return turns;
 }
 
-// Memoized turn card component (Fireflies, Fathom & Otter style)
+// Memoized turn card component (Clean, minimal, professional industry-standard)
 const SpeakerTurnCard = memo(function SpeakerTurnCard({
     turn,
-    isNextSameSpeaker,
     showConfidence,
     highlightTerms = [],
 }: {
@@ -207,35 +224,35 @@ const SpeakerTurnCard = memo(function SpeakerTurnCard({
     const displayText = turn.text.trim() === '' ? '[Silence]' : turn.text;
 
     return (
-        <div id={`turn-${turn.id}`} className="mb-2">
+        <div id={`turn-${turn.id}`} className="mb-3">
             <div
-                className={`transition-all duration-300 rounded-2xl border shadow-xs hover:shadow-sm ${
+                className={`transition-all duration-200 rounded-xl border bg-white dark:bg-zinc-900 shadow-2xs hover:shadow-xs ${
                     turn.isHighlighted
-                        ? 'ring-2 ring-indigo-500 bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-800'
+                        ? 'ring-2 ring-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-800'
                         : isMic
-                        ? 'border-blue-200/80 bg-blue-50/35 dark:border-blue-900/40 dark:bg-blue-950/20'
-                        : 'border-purple-200/80 bg-purple-50/25 dark:border-purple-900/40 dark:bg-purple-950/20'
+                        ? 'border-gray-200/90 dark:border-zinc-800 border-l-[3.5px] border-l-blue-500'
+                        : 'border-gray-200/90 dark:border-zinc-800 border-l-[3.5px] border-l-purple-500'
                 }`}
             >
                 {/* Cited Excerpt badge if cited */}
                 {turn.isHighlighted && (
-                    <div className="px-4 pt-2.5 pb-0 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                    <div className="px-3.5 pt-2 pb-0 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
                         <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-ping" />
                         <span>Cited Excerpt • {formatRecordingTime(turn.timestamp)}</span>
                     </div>
                 )}
 
-                {/* Header: 👤 Speaker Name / Chip on left, [01:15] on right */}
-                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100/90 dark:border-zinc-800/60 bg-white/40 dark:bg-zinc-900/30 rounded-t-2xl">
+                {/* Header: Speaker Avatar & Chip on left, [01:15] Seek Button on right */}
+                <div className="flex items-center justify-between px-3.5 py-2 border-b border-gray-100 dark:border-zinc-800/70 bg-gray-50/40 dark:bg-zinc-900/40 rounded-t-xl">
                     <div className="flex items-center gap-2">
                         <div
-                            className={`w-6 h-6 rounded-full flex items-center justify-center text-xs select-none ${
+                            className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shrink-0 select-none shadow-2xs ${
                                 isMic
-                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300'
-                                    : 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300'
+                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60'
+                                    : 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 border border-purple-200/60 dark:border-purple-800/60'
                             }`}
                         >
-                            👤
+                            <User className="w-3.5 h-3.5" />
                         </div>
 
                         <SpeakerChip
@@ -275,31 +292,77 @@ const SpeakerTurnCard = memo(function SpeakerTurnCard({
                     </div>
                 </div>
 
-                {/* Body: Transcript Text */}
-                <div className="px-4 py-3">
-                    <p className={`text-base leading-relaxed text-gray-800 dark:text-zinc-100 font-normal ${
+                {/* Body: Clean, unquoted transcript text */}
+                <div className="px-3.5 py-3">
+                    <p className={`text-[13.5px] leading-relaxed text-gray-800 dark:text-zinc-200 font-normal select-text ${
                         turn.isStreaming ? 'animate-pulse' : ''
                     }`}>
-                        &ldquo;{turn.isHighlighted && highlightTerms.length > 0
+                        {turn.isHighlighted && highlightTerms.length > 0
                             ? renderHighlightedText(displayText, highlightTerms)
-                            : displayText}&rdquo;
+                            : displayText}
                     </p>
                 </div>
             </div>
+        </div>
+    );
+});
 
-            {/* Turn transition indicator (▼) between consecutive different speaker turns */}
-            {!isNextSameSpeaker && (
-                <div className="flex flex-col items-center justify-center py-1.5 select-none opacity-50 hover:opacity-100 transition-opacity">
-                    <div className="w-px h-2 bg-gray-300 dark:bg-zinc-700" />
-                    <span className="text-[11px] text-gray-400 dark:text-zinc-500 font-bold -mt-0.5 leading-none">▼</span>
+// Clean, minimal single-line segment for live streaming (Normal Old UI)
+const LiveTranscriptSegment = memo(function LiveTranscriptSegment({
+    segment,
+    displayText,
+    isStreaming,
+    showConfidence,
+}: {
+    segment: TranscriptSegmentData;
+    displayText: string;
+    isStreaming: boolean;
+    showConfidence: boolean;
+}) {
+    const textToShow = displayText || (segment.text?.trim() === '' ? '[Silence]' : segment.text);
+
+    return (
+        <div id={`segment-${segment.id}`} className="py-1 px-3 rounded-lg hover:bg-gray-50/80 dark:hover:bg-zinc-850/50 transition-colors">
+            <div className="flex items-start gap-2.5">
+                <Tooltip>
+                    <TooltipTrigger asChild>
+                        <button
+                            type="button"
+                            className="text-xs text-gray-400 dark:text-zinc-500 font-mono font-medium px-1.5 py-0.5 rounded flex-shrink-0 min-w-[50px] text-left cursor-default select-none mt-0.5"
+                        >
+                            {formatRecordingTime(segment.timestamp)}
+                        </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                        <div className="space-y-1">
+                            <p className="text-xs">Recording timestamp</p>
+                            {segment.confidence !== undefined && showConfidence && (
+                                <ConfidenceIndicator confidence={segment.confidence} showIndicator={showConfidence} />
+                            )}
+                        </div>
+                    </TooltipContent>
+                </Tooltip>
+
+                <div className="flex-1 min-w-0">
+                    {isStreaming ? (
+                        <div className="inline-flex items-center gap-1.5 bg-gray-100/90 dark:bg-zinc-800/80 border border-gray-200/90 dark:border-zinc-700/80 rounded-lg px-3 py-1.5 shadow-2xs">
+                            <span className="text-gray-900 dark:text-zinc-100 text-sm leading-relaxed font-sans">{textToShow}</span>
+                            <span className="inline-block w-2 h-4 bg-blue-500 animate-pulse rounded-xs" />
+                        </div>
+                    ) : (
+                        <p className="text-sm leading-relaxed text-gray-800 dark:text-zinc-200 font-normal select-text">
+                            {textToShow}
+                        </p>
+                    )}
                 </div>
-            )}
+            </div>
         </div>
     );
 });
 
 export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps> = ({
     segments,
+    speakersById,
     isRecording = false,
     isPaused = false,
     isProcessing = false,
@@ -349,9 +412,13 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     const [, rerender] = useReducer((x: number) => x + 1, 0);
 
     // Streaming text effect hook (typewriter animation for new transcripts)
+    // Mode tracking: live streaming mode is active while recording OR while stopping/finalizing
+    const isLiveStreamMode = isRecording || isStopping || isProcessing;
+
+    // Streaming text effect hook (typewriter animation for new transcripts)
     const { streamingSegmentId, getDisplayText } = useTranscriptStreaming(
         segments,
-        isRecording,
+        isLiveStreamMode,
         enableStreaming
     );
 
@@ -360,17 +427,22 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         return extractKeywords(highlightQuery);
     }, [highlightQuery]);
 
-    // Group segments into turn cards (Fireflies/Fathom/Otter style)
+    // Group segments into turn cards (used for post-meeting view only)
     const turns = useMemo(() => {
-        return groupSegmentsIntoTurns(segments, highlightedSegmentId, streamingSegmentId, getDisplayText);
-    }, [segments, highlightedSegmentId, streamingSegmentId, getDisplayText]);
+        if (isLiveStreamMode) return [];
+        return groupSegmentsIntoTurns(segments, highlightedSegmentId, streamingSegmentId, getDisplayText, speakersById);
+    }, [isLiveStreamMode, segments, highlightedSegmentId, streamingSegmentId, getDisplayText, speakersById]);
 
-    // Setup virtualizer for efficient rendering of large turn lists
+    // Active item count based on mode (live stream vs post-meeting turns)
+    const itemCount = isLiveStreamMode ? segments.length : turns.length;
+    const hasItems = itemCount > 0;
+
+    // Setup virtualizer for efficient rendering
     const virtualizer = useVirtualizer({
-        count: turns.length,
+        count: itemCount,
         getScrollElement: () => scrollRef.current,
-        estimateSize: () => 110, // Estimated height per turn card
-        overscan: 6, // Render extra items above/below viewport
+        estimateSize: () => isLiveStreamMode ? 44 : 110,
+        overscan: 6,
         onChange: () => {
             startTransition(() => {
                 rerender();
@@ -378,11 +450,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         },
     });
 
-    // Custom hook for auto-scrolling (supports both virtualized and non-virtualized)
+    // Custom hook for auto-scrolling
     useAutoScroll({
         scrollRef,
-        segments: turns,
-        isRecording,
+        segments: isLiveStreamMode ? segments : turns,
+        isRecording: isLiveStreamMode,
         isPaused,
         virtualizer,
         virtualizationThreshold: VIRTUALIZATION_THRESHOLD,
@@ -531,7 +603,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     }, [onLoadMore, hasMore, isLoadingMore, isRecording]);
 
     // Use simple rendering for small lists, virtualization for large lists
-    const useVirtualization = turns.length >= VIRTUALIZATION_THRESHOLD;
+    const useVirtualization = itemCount >= VIRTUALIZATION_THRESHOLD;
 
     return (
         <div ref={scrollRef} className="flex flex-col h-full overflow-y-auto px-4 py-2">
@@ -544,9 +616,9 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 )}
             </AnimatePresence>
 
-            {/* Content - add padding when recording to prevent overlap */}
+            {/* Content area */}
             <div className={isRecording ? 'pt-2' : ''}>
-            {turns.length === 0 ? (
+            {!hasItems ? (
                 // Empty state
                 <motion.div
                     initial={{ opacity: 0 }}
@@ -583,7 +655,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     )}
                 </motion.div>
             ) : useVirtualization ? (
-                // Virtualized rendering for large lists
+                // Virtualized rendering
                 <>
                     <div
                         style={{
@@ -593,7 +665,35 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         }}
                     >
                         {virtualizer.getVirtualItems().map((virtualRow) => {
+                            if (isLiveStreamMode) {
+                                const segment = segments[virtualRow.index];
+                                if (!segment) return null;
+
+                                return (
+                                    <div
+                                        key={segment.id}
+                                        data-index={virtualRow.index}
+                                        ref={virtualizer.measureElement}
+                                        style={{
+                                            position: "absolute",
+                                            top: 0,
+                                            left: 0,
+                                            width: "100%",
+                                            transform: `translateY(${virtualRow.start}px)`,
+                                        }}
+                                    >
+                                        <LiveTranscriptSegment
+                                            segment={segment}
+                                            displayText={getDisplayText(segment)}
+                                            isStreaming={streamingSegmentId === segment.id}
+                                            showConfidence={showConfidence}
+                                        />
+                                    </div>
+                                );
+                            }
+
                             const turn = turns[virtualRow.index];
+                            if (!turn) return null;
 
                             return (
                                 <div
@@ -620,7 +720,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     </div>
 
                     {/* Infinite scroll trigger and loading indicator */}
-                    {(hasMore || isLoadingMore) && !isRecording && turns.length > 0 && (
+                    {(hasMore || isLoadingMore) && !isLiveStreamMode && turns.length > 0 && (
                         <div ref={loadMoreTriggerRef} className="flex justify-center items-center py-4 mt-2">
                             {isLoadingMore ? (
                                 <div className="flex items-center gap-2 text-gray-500">
@@ -636,7 +736,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     )}
 
                     {/* Listening indicator when recording */}
-                    {!isStopping && isRecording && !isPaused && !isProcessing && turns.length > 0 && (
+                    {!isStopping && isRecording && !isPaused && !isProcessing && hasItems && (
                         <motion.div
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
@@ -649,11 +749,23 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     )}
                 </>
             ) : (
-                // Simple rendering for small lists (better animations)
+                // Simple rendering for small lists
                 <>
-                    <div className="space-y-1">
-                        {turns.map((turn, idx) => {
-                            return (
+                    {isLiveStreamMode ? (
+                        <div className="space-y-0.5">
+                            {segments.map((segment) => (
+                                <LiveTranscriptSegment
+                                    key={segment.id}
+                                    segment={segment}
+                                    displayText={getDisplayText(segment)}
+                                    isStreaming={streamingSegmentId === segment.id}
+                                    showConfidence={showConfidence}
+                                />
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="space-y-1">
+                            {turns.map((turn, idx) => (
                                 <motion.div
                                     key={turn.id}
                                     initial={{ opacity: 0, y: 5 }}
@@ -667,12 +779,12 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         highlightTerms={highlightTerms}
                                     />
                                 </motion.div>
-                            );
-                        })}
-                    </div>
+                            ))}
+                        </div>
+                    )}
 
                     {/* Infinite scroll trigger (for small lists that grow) */}
-                    {(hasMore || isLoadingMore) && !isRecording && turns.length > 0 && (
+                    {(hasMore || isLoadingMore) && !isLiveStreamMode && turns.length > 0 && (
                         <div ref={loadMoreTriggerRef} className="flex justify-center items-center py-4 mt-2">
                             {isLoadingMore ? (
                                 <div className="flex items-center gap-2 text-gray-500">
@@ -688,7 +800,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     )}
 
                     {/* Listening indicator when recording */}
-                    {!isStopping && isRecording && !isPaused && !isProcessing && turns.length > 0 && (
+                    {!isStopping && isRecording && !isPaused && !isProcessing && hasItems && (
                         <motion.div
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}

@@ -7,6 +7,23 @@ use sqlx::{Connection, Error as SqlxError, PgConnection, PgPool};
 use tracing::{error, info};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct TranscriptWithSpeakerRow {
+    pub id: String,
+    pub meeting_id: String,
+    pub transcript: String,
+    pub timestamp: String,
+    pub audio_start_time: Option<f64>,
+    pub audio_end_time: Option<f64>,
+    pub duration: Option<f64>,
+    pub user_id: Option<Uuid>,
+    pub speaker_id: Option<Uuid>,
+    pub speaker: Option<String>,
+    pub speaker_display_name: Option<String>,
+    pub speaker_channel: Option<String>,
+    pub cluster_key: Option<String>,
+}
+
 pub struct MeetingsRepository;
 
 impl MeetingsRepository {
@@ -142,12 +159,30 @@ impl MeetingsRepository {
         }
 
         if let Some(meeting) = meeting {
-            // Get all transcripts for this meeting
-            let transcripts =
-                sqlx::query_as::<_, Transcript>("SELECT * FROM transcripts WHERE meeting_id = $1 ORDER BY audio_start_time ASC")
-                    .bind(meeting_id)
-                    .fetch_all(&mut *transaction)
-                    .await?;
+            // Get all transcripts for this meeting with speaker attribution
+            let rows = sqlx::query_as::<_, TranscriptWithSpeakerRow>(
+                "SELECT 
+                    t.id,
+                    t.meeting_id,
+                    t.transcript,
+                    t.timestamp,
+                    t.audio_start_time,
+                    t.audio_end_time,
+                    t.duration,
+                    t.user_id,
+                    t.speaker_id,
+                    t.speaker,
+                    ms.display_name AS speaker_display_name,
+                    ms.channel AS speaker_channel,
+                    ms.cluster_key
+                 FROM transcripts t
+                 LEFT JOIN meeting_speakers ms ON t.speaker_id = ms.id
+                 WHERE t.meeting_id = $1
+                 ORDER BY COALESCE(t.audio_start_time, 0.0) ASC, t.timestamp ASC"
+            )
+            .bind(meeting_id)
+            .fetch_all(&mut *transaction)
+            .await?;
 
             let recorder_email: Option<String> = if let Some(uid) = meeting.user_id {
                 sqlx::query_scalar("SELECT email FROM app_users WHERE id = $1")
@@ -161,17 +196,48 @@ impl MeetingsRepository {
 
             transaction.commit().await?;
 
-            // Convert Transcript to MeetingTranscript
-            let meeting_transcripts = transcripts
+            // Convert TranscriptWithSpeakerRow to MeetingTranscript
+            let meeting_transcripts = rows
                 .into_iter()
-                .map(|t| MeetingTranscript {
-                    id: t.id,
-                    text: t.transcript,
-                    timestamp: t.timestamp,
-                    audio_start_time: t.audio_start_time,
-                    audio_end_time: t.audio_end_time,
-                    duration: t.duration,
-                    speaker_id: t.speaker_id.map(|s| s.to_string()),
+                .map(|r| {
+                    let is_mic = r.speaker_channel.as_deref() == Some("mic")
+                        || r.speaker.as_deref() == Some("mic")
+                        || r.cluster_key.as_deref() == Some("mic:S0");
+
+                    let channel = if is_mic { "mic".to_string() } else { "system".to_string() };
+
+                    let default_name = if is_mic {
+                        "You".to_string()
+                    } else if let Some(ck) = &r.cluster_key {
+                        let num = ck.trim_start_matches("sys:S");
+                        if !num.is_empty() && num != ck {
+                            format!("Speaker {}", num)
+                        } else {
+                            "Speaker 1".to_string()
+                        }
+                    } else {
+                        "Speaker 1".to_string()
+                    };
+
+                    let display_name = r.speaker_display_name
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or(default_name);
+
+                    let effective_cluster_key = r.cluster_key
+                        .unwrap_or_else(|| if is_mic { "mic:S0".to_string() } else { "sys:S1".to_string() });
+
+                    MeetingTranscript {
+                        id: r.id,
+                        text: r.transcript,
+                        timestamp: r.timestamp,
+                        audio_start_time: r.audio_start_time,
+                        audio_end_time: r.audio_end_time,
+                        duration: r.duration,
+                        speaker_id: r.speaker_id.map(|s| s.to_string()),
+                        speaker_name: Some(display_name),
+                        speaker_channel: Some(channel),
+                        cluster_key: Some(effective_cluster_key),
+                    }
                 })
                 .collect::<Vec<_>>();
 
@@ -240,7 +306,7 @@ impl MeetingsRepository {
         let transcripts = sqlx::query_as::<_, Transcript>(
             "SELECT * FROM transcripts
              WHERE meeting_id = $1
-             ORDER BY audio_start_time ASC
+             ORDER BY COALESCE(audio_start_time, 0.0) ASC, timestamp ASC
              LIMIT $2 OFFSET $3"
         )
         .bind(meeting_id)
@@ -250,6 +316,56 @@ impl MeetingsRepository {
         .await?;
 
         Ok((transcripts, total.0))
+    }
+
+    /// Get meeting transcripts joined with meeting_speakers for rich speaker attribution & clusters
+    pub async fn get_meeting_transcripts_with_speakers_paginated(
+        pool: &PgPool,
+        meeting_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<TranscriptWithSpeakerRow>, i64), SqlxError> {
+        if meeting_id.trim().is_empty() {
+            return Err(SqlxError::Protocol(
+                "meeting_id cannot be empty".to_string(),
+            ));
+        }
+
+        let total: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM transcripts WHERE meeting_id = $1"
+        )
+        .bind(meeting_id)
+        .fetch_one(pool)
+        .await?;
+
+        let rows = sqlx::query_as::<_, TranscriptWithSpeakerRow>(
+            "SELECT 
+                t.id,
+                t.meeting_id,
+                t.transcript,
+                t.timestamp,
+                t.audio_start_time,
+                t.audio_end_time,
+                t.duration,
+                t.user_id,
+                t.speaker_id,
+                t.speaker,
+                ms.display_name AS speaker_display_name,
+                ms.channel AS speaker_channel,
+                ms.cluster_key
+             FROM transcripts t
+             LEFT JOIN meeting_speakers ms ON t.speaker_id = ms.id
+             WHERE t.meeting_id = $1
+             ORDER BY COALESCE(t.audio_start_time, 0.0) ASC, t.timestamp ASC
+             LIMIT $2 OFFSET $3"
+        )
+        .bind(meeting_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+
+        Ok((rows, total.0))
     }
 
     pub async fn update_meeting_title(

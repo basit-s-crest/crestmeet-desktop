@@ -49,6 +49,26 @@ impl SpeakersRepository {
         pool: &PgPool,
         meeting_id: &str,
     ) -> Result<Vec<MeetingSpeaker>, SqlxError> {
+        // Self-heal: revert any remote system clusters (sys:*) falsely assigned to "You" by legacy mock OCR
+        let _ = sqlx::query(
+            "UPDATE meeting_speakers
+             SET display_name = CASE
+                     WHEN cluster_key = 'sys:S1' THEN 'Speaker 1'
+                     WHEN cluster_key = 'sys:S2' THEN 'Speaker 2'
+                     WHEN cluster_key LIKE 'sys:S%' THEN 'Speaker ' || SUBSTRING(cluster_key FROM 6)
+                     ELSE 'Speaker'
+                 END,
+                 name_source = 'channel',
+                 person_id = NULL
+             WHERE meeting_id = $1 
+               AND channel != 'mic' 
+               AND (display_name = 'You' OR display_name = 'You (Microphone)' OR display_name = 'Me')
+               AND (name_source IS NULL OR name_source != 'manual')"
+        )
+        .bind(meeting_id)
+        .execute(pool)
+        .await;
+
         let speakers = sqlx::query_as::<_, MeetingSpeaker>(
             "SELECT id, meeting_id, cluster_key, channel, person_id, display_name,
                     name_source, name_confidence, suggested_name, embedding, embedding_model,
@@ -194,13 +214,17 @@ impl SpeakersRepository {
             "INSERT INTO meeting_speakers (
                 meeting_id, cluster_key, channel, display_name, name_source, name_confidence, embedding, embedding_model, created_at, updated_at
              )
-             VALUES ($1, $2, $3, $4, 'channel', 0.85, $5, $6, NOW(), NOW())
+             VALUES ($1, $2, $3, $4, 'channel', 0.50, $5, $6, NOW(), NOW())
              ON CONFLICT (meeting_id, cluster_key) DO UPDATE
              SET embedding = COALESCE(EXCLUDED.embedding, meeting_speakers.embedding),
                  embedding_model = COALESCE(EXCLUDED.embedding_model, meeting_speakers.embedding_model),
                  display_name = CASE 
                      WHEN meeting_speakers.name_source = 'manual' THEN meeting_speakers.display_name
-                     ELSE COALESCE(meeting_speakers.display_name, EXCLUDED.display_name)
+                     ELSE EXCLUDED.display_name
+                 END,
+                 name_source = CASE
+                     WHEN meeting_speakers.name_source = 'manual' THEN 'manual'
+                     ELSE 'channel'
                  END,
                  updated_at = NOW()
              RETURNING id, meeting_id, cluster_key, channel, person_id, display_name,
@@ -234,6 +258,31 @@ impl SpeakersRepository {
         )
         .bind(speaker_id)
         .bind(speaker_confidence)
+        .bind(transcript_id)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Link a transcript segment to a resolved speaker cluster and update channel
+    pub async fn update_transcript_speaker_and_channel(
+        pool: &PgPool,
+        transcript_id: &str,
+        speaker_id: Uuid,
+        speaker_confidence: f32,
+        channel: &str,
+    ) -> Result<(), SqlxError> {
+        sqlx::query(
+            "UPDATE transcripts
+             SET speaker_id = $1,
+                 speaker_confidence = $2,
+                 speaker = $3
+             WHERE id = $4",
+        )
+        .bind(speaker_id)
+        .bind(speaker_confidence)
+        .bind(channel)
         .bind(transcript_id)
         .execute(pool)
         .await?;

@@ -6,6 +6,7 @@ import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptVie
 import { TranscriptButtonGroup } from './TranscriptButtonGroup';
 import { MeetingVideoPlayer } from './MeetingVideoPlayer';
 import { MeetingSpeakersBar } from '@/components/Speakers/MeetingSpeakersBar';
+import { useMeetingSpeakers } from '@/hooks/useMeetingSpeakers';
 import { useMemo, useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useAuth } from '@/contexts/AuthContext';
@@ -97,10 +98,12 @@ export function TranscriptPanel({
       speakerId: t.speaker_id,
       speakerName: t.speaker_name,
       speakerChannel: t.speaker_channel,
+      clusterKey: t.cluster_key,
     }));
   }, [transcripts, usePagination, segments]);
 
   const { user } = useAuth();
+  const { speakersById } = useMeetingSpeakers(meetingId || '');
   const [isFolderLocal, setIsFolderLocal] = useState<boolean>(false);
   const [hasLocalVideo, setHasLocalVideo] = useState<boolean>(false);
   const [isVideoPlayerOpen, setIsVideoPlayerOpen] = useState<boolean>(false);
@@ -221,6 +224,7 @@ export function TranscriptPanel({
       <div className="flex-1 overflow-hidden pb-4">
         <VirtualizedTranscriptView
           segments={convertedSegments}
+          speakersById={speakersById}
           isRecording={isRecording}
           isPaused={false}
           isProcessing={false}

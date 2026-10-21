@@ -160,16 +160,16 @@ pub async fn ensure_rag_service_started() {
         }
     }
 
-    // Non-blocking poll for readiness in the background (up to 5 seconds)
+    // Non-blocking poll for readiness in the background (up to 15 seconds)
     tokio::spawn(async {
-        for attempt in 1..=25 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        for attempt in 1..=60 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
             if is_rag_service_alive().await {
-                info!("🎉 Python RAG sidecar is ready and healthy at {} (after {}ms)", RAG_SERVICE_URL, attempt * 200);
+                info!("🎉 Python RAG sidecar is ready and healthy at {} (after {}ms)", RAG_SERVICE_URL, attempt * 250);
                 return;
             }
         }
-        warn!("⚠️ Python RAG sidecar did not respond within 5s timeout, continuing without blocking");
+        warn!("⚠️ Python RAG sidecar did not respond within 15s timeout, continuing without blocking");
     });
 }
 

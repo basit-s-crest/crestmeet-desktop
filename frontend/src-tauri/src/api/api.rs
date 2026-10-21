@@ -158,7 +158,7 @@ pub struct MeetingDetails {
     pub upload_status: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingTranscript {
     pub id: String,
     pub text: String,
@@ -172,6 +172,12 @@ pub struct MeetingTranscript {
     pub duration: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_channel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cluster_key: Option<String>,
 }
 
 
@@ -223,7 +229,7 @@ pub struct SaveTranscriptRequest {
     pub transcripts: Vec<TranscriptSegment>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptSegment {
     pub id: String,
     pub text: String,
@@ -235,6 +241,14 @@ pub struct TranscriptSegment {
     pub audio_end_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+    #[serde(default)]
+    pub speaker: Option<String>,
+    #[serde(default)]
+    pub speaker_id: Option<String>,
+    #[serde(default)]
+    pub speaker_name: Option<String>,
+    #[serde(default)]
+    pub speaker_channel: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1096,26 +1110,57 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
 
     let pool = state.db_manager.pool();
 
-    match MeetingsRepository::get_meeting_transcripts_paginated(pool, &meeting_id, limit, offset).await {
-        Ok((transcripts, total_count)) => {
+    match MeetingsRepository::get_meeting_transcripts_with_speakers_paginated(pool, &meeting_id, limit, offset).await {
+        Ok((rows, total_count)) => {
             log_info!(
                 "Successfully retrieved {} transcripts for meeting {} (total: {})",
-                transcripts.len(),
+                rows.len(),
                 meeting_id,
                 total_count
             );
 
-            // Convert Transcript to MeetingTranscript
-            let meeting_transcripts = transcripts
+            // Convert TranscriptWithSpeakerRow to MeetingTranscript
+            let meeting_transcripts = rows
                 .into_iter()
-                .map(|t| MeetingTranscript {
-                    id: t.id,
-                    text: t.transcript,
-                    timestamp: t.timestamp,
-                    audio_start_time: t.audio_start_time,
-                    audio_end_time: t.audio_end_time,
-                    duration: t.duration,
-                    speaker_id: t.speaker_id.map(|u| u.to_string()),
+                .map(|r| {
+                    let is_mic = r.speaker_channel.as_deref() == Some("mic")
+                        || r.speaker.as_deref() == Some("mic")
+                        || r.cluster_key.as_deref() == Some("mic:S0");
+
+                    let channel = if is_mic { "mic".to_string() } else { "system".to_string() };
+
+                    let default_name = if is_mic {
+                        "You".to_string()
+                    } else if let Some(ck) = &r.cluster_key {
+                        let num = ck.trim_start_matches("sys:S");
+                        if !num.is_empty() && num != ck {
+                            format!("Speaker {}", num)
+                        } else {
+                            "Speaker 1".to_string()
+                        }
+                    } else {
+                        "Speaker 1".to_string()
+                    };
+
+                    let display_name = r.speaker_display_name
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or(default_name);
+
+                    let effective_cluster_key = r.cluster_key
+                        .unwrap_or_else(|| if is_mic { "mic:S0".to_string() } else { "sys:S1".to_string() });
+
+                    MeetingTranscript {
+                        id: r.id,
+                        text: r.transcript,
+                        timestamp: r.timestamp,
+                        audio_start_time: r.audio_start_time,
+                        audio_end_time: r.audio_end_time,
+                        duration: r.duration,
+                        speaker_id: r.speaker_id.map(|u| u.to_string()),
+                        speaker_name: Some(display_name),
+                        speaker_channel: Some(channel),
+                        cluster_key: Some(effective_cluster_key),
+                    }
                 })
                 .collect::<Vec<_>>();
 

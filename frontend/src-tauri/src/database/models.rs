@@ -60,6 +60,9 @@ pub struct Transcript {
     #[sqlx(default)]
     #[serde(default)]
     pub speaker_id: Option<Uuid>,
+    #[sqlx(default)]
+    #[serde(default)]
+    pub speaker: Option<String>,
 }
 
 

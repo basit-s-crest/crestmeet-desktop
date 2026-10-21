@@ -427,6 +427,10 @@ async fn run_import<R: Runtime>(
                     audio_start_time: Some(ds.audio_start_time),
                     audio_end_time: Some(ds.audio_end_time),
                     duration: Some(ds.duration),
+                    speaker: ds.speaker.clone(),
+                    speaker_id: None,
+                    speaker_name: ds.speaker.clone(),
+                    speaker_channel: Some("system".to_string()),
                 }
             })
             .collect();

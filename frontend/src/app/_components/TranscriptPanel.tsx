@@ -48,6 +48,7 @@ export function TranscriptPanel({
       speakerId: t.speaker_id,
       speakerName: t.speaker_name,
       speakerChannel: t.speaker_channel,
+      clusterKey: t.cluster_key,
     })),
     [transcripts]
   );
