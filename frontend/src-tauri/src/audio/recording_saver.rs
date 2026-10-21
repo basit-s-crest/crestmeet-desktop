@@ -22,6 +22,12 @@ pub struct TranscriptSegment {
     pub display_time: String,   // Formatted time for display like "[02:15]"
     pub confidence: f32,
     pub sequence_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker_channel: Option<String>,
 }
 
 /// Meeting metadata structure
@@ -110,10 +116,18 @@ impl RecordingSaver {
             error!("Failed to lock transcript segments for adding segment {}", segment.id);
         }
 
-        // NEW: Save incrementally to disk
-        if let Some(folder) = &self.meeting_folder {
-            if let Err(e) = self.write_transcripts_json(folder) {
-                warn!("Failed to write incremental transcript update: {}", e);
+        // Periodically save incrementally to disk (every 10 segments) to prevent blocking hot audio loops
+        let should_save = if let Ok(segments) = self.transcript_segments.lock() {
+            !segments.is_empty() && segments.len() % 10 == 0
+        } else {
+            false
+        };
+
+        if should_save {
+            if let Some(folder) = &self.meeting_folder {
+                if let Err(e) = self.write_transcripts_json(folder) {
+                    warn!("Failed to write incremental transcript update: {}", e);
+                }
             }
         }
     }
@@ -129,6 +143,9 @@ impl RecordingSaver {
             display_time: "[00:00]".to_string(),
             confidence: 1.0,
             sequence_id: 0,
+            speaker_id: None,
+            speaker_name: None,
+            speaker_channel: None,
         };
         self.add_transcript_segment(segment);
     }

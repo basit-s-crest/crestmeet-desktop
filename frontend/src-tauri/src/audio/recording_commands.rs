@@ -296,6 +296,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
                 // Create structured transcript segment
+                let is_sys = update.source == "system";
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
                     text: update.text.clone(),
@@ -305,6 +306,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker_id: None,
+                    speaker_name: Some(if is_sys { "Speaker 1".to_string() } else { "You (Microphone)".to_string() }),
+                    speaker_channel: Some(if is_sys { "system".to_string() } else { "mic".to_string() }),
                 };
 
                 // Save to recording manager
@@ -532,6 +536,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
                 // Create structured transcript segment
+                let is_sys = update.source == "system";
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
                     text: update.text.clone(),
@@ -541,6 +546,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker_id: None,
+                    speaker_name: Some(if is_sys { "Speaker 1".to_string() } else { "You (Microphone)".to_string() }),
+                    speaker_channel: Some(if is_sys { "system".to_string() } else { "mic".to_string() }),
                 };
 
                 // Save to recording manager

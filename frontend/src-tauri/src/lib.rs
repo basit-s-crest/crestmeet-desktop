@@ -58,6 +58,7 @@ pub mod tray;
 pub mod utils;
 pub mod video;
 pub mod whisper_engine;
+pub mod rag_sidecar;
 
 use audio::{list_audio_devices, AudioDevice, trigger_audio_permission};
 use log::{error as log_error, info as log_info};
@@ -514,6 +515,11 @@ pub fn run() {
                 log::warn!("Failed to resolve resource directory for templates");
             }
 
+            // Start managed Python RAG & OCR sidecar service in the background
+            tauri::async_runtime::spawn(async {
+                rag_sidecar::ensure_rag_service_started().await;
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -861,6 +867,9 @@ pub fn run() {
                 tauri::RunEvent::Exit => {
                     log::info!("Application exiting, cleaning up resources...");
                     tauri::async_runtime::block_on(async {
+                        // Terminate Python RAG sidecar cleanly
+                        rag_sidecar::stop_rag_service().await;
+
                         // Clean up database connection and checkpoint WAL
                         if let Some(app_state) = _app_handle.try_state::<state::AppState>() {
                             log::info!("Starting database cleanup...");

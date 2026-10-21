@@ -697,7 +697,7 @@ pub struct AudioPipeline {
     transcription_sender: mpsc::UnboundedSender<AudioChunk>,
     #[allow(dead_code)]
     state: Arc<RecordingState>,
-    vad_processor: ContinuousVadProcessor,
+    vad_processor: Option<ContinuousVadProcessor>,
     sample_rate: u32,
     chunk_id_counter: u64,
     // Performance optimization: reduce logging frequency
@@ -711,6 +711,7 @@ pub struct AudioPipeline {
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
     pub is_streaming_stt: bool,
+    streaming_resampler: Option<SincFixedIn<f32>>,
 }
 
 impl AudioPipeline {
@@ -743,22 +744,57 @@ impl AudioPipeline {
         // This bridges natural pauses without excessive fragmentation
         // For mac os core audio, 900ms, for windows 400ms seems good
 
-        let redemption_time = if cfg!(target_os = "macos") { 400 } else { 400 };
-
-        let vad_processor = match ContinuousVadProcessor::new(sample_rate, redemption_time) {
-            Ok(processor) => {
-                info!("VAD-driven pipeline: VAD segments will be sent directly to Whisper (no time-based accumulation)");
-                processor
+        // Only initialize Silero VAD / ONNX Runtime if we are using batch/local models (Whisper/Parakeet).
+        // For streaming STT (Deepgram), server-side VAD handles speech detection, so we bypass ONNX
+        // entirely to avoid consuming background threads and CPU cycles on dual-core systems.
+        let vad_processor = if !is_streaming_stt {
+            let redemption_time = if cfg!(target_os = "macos") { 400 } else { 400 };
+            match ContinuousVadProcessor::new(sample_rate, redemption_time) {
+                Ok(processor) => {
+                    info!("VAD-driven pipeline: VAD segments will be sent directly to Whisper (no time-based accumulation)");
+                    Some(processor)
+                }
+                Err(e) => {
+                    error!("Failed to create VAD processor: {}", e);
+                    panic!("VAD processor creation failed: {}", e);
+                }
             }
-            Err(e) => {
-                error!("Failed to create VAD processor: {}", e);
-                panic!("VAD processor creation failed: {}", e);
-            }
+        } else {
+            info!("Direct live streaming STT: Silero VAD / ONNX bypassed to maximize real-time throughput");
+            None
         };
 
         // Initialize professional audio mixing components with adaptive window size
         let ring_buffer = AudioMixerRingBuffer::new(sample_rate, is_streaming_stt);
         let mixer = ProfessionalAudioMixer::new(sample_rate);
+
+        // Pre-initialize persistent resampler for streaming STT (e.g., 48kHz -> 16kHz)
+        // Creating a resampler once saves ~50-80ms of sinc table calculation per 100ms chunk!
+        let streaming_resampler = if is_streaming_stt && sample_rate != 16000 {
+            let ratio = 16000.0 / sample_rate as f64;
+            let window_ms = 100.0;
+            let window_size_samples = (sample_rate as f32 * window_ms / 1000.0) as usize;
+            let params = SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: 256,
+                window: WindowFunction::BlackmanHarris2,
+            };
+            match SincFixedIn::<f32>::new(ratio, 2.0, params, window_size_samples, 1) {
+                Ok(resampler) => {
+                    info!("✅ Pre-initialized persistent pipeline streaming resampler ({}Hz -> 16000Hz, window_size={})",
+                          sample_rate, window_size_samples);
+                    Some(resampler)
+                }
+                Err(e) => {
+                    warn!("⚠️ Failed to create persistent pipeline streaming resampler: {}, will fallback to per-chunk", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         // Note: target_chunk_duration_ms is ignored - VAD controls segmentation now
         let _ = target_chunk_duration_ms;
@@ -780,6 +816,7 @@ impl AudioPipeline {
             mixer,
             recording_sender_for_mixed: None,  // Will be set by manager
             is_streaming_stt,
+            streaming_resampler,
         }
     }
 
@@ -851,16 +888,37 @@ impl AudioPipeline {
                             // Previous 2x gain was causing excessive limiting/distortion
                             let mixed_with_gain = mixed_clean;
 
+                            // Determine dominant speaker channel based on mic vs sys energy in this window
+                            let mic_sum_sq: f32 = mic_window.iter().map(|&x| x * x).sum();
+                            let sys_sum_sq: f32 = sys_window.iter().map(|&x| x * x).sum();
+                            let mic_rms = (mic_sum_sq / mic_window.len().max(1) as f32).sqrt();
+                            let sys_rms = (sys_sum_sq / sys_window.len().max(1) as f32).sqrt();
+
+                            let dominant_device = if sys_rms > 0.005 && sys_rms > mic_rms * 1.15 {
+                                DeviceType::System
+                            } else {
+                                DeviceType::Microphone
+                            };
+
                             // STEP 3: Send mixed audio for transcription
                             if self.is_streaming_stt {
                                 // DIRECT LIVE STREAMING MODE (Deepgram):
-                                // Resample mixed audio directly to 16kHz and send immediately (every 100ms window).
+                                // Fast persistent resampler directly to 16kHz and send immediately (every 100ms window).
                                 // Deepgram handles server-side streaming VAD and endpointing with zero chunk loss
                                 // and zero lag between sentences.
-                                let samples_16k = if self.sample_rate != 16000 {
-                                    crate::audio::audio_processing::resample_audio(&mixed_with_gain, self.sample_rate, 16000)
-                                } else {
+                                let samples_16k = if self.sample_rate == 16000 {
                                     mixed_with_gain.clone()
+                                } else if let Some(ref mut resampler) = self.streaming_resampler {
+                                    let waves_in = vec![mixed_with_gain.clone()];
+                                    match resampler.process(&waves_in, None) {
+                                        Ok(waves_out) => waves_out.into_iter().next().unwrap_or_default(),
+                                        Err(e) => {
+                                            warn!("Streaming resampler process error: {}, using fallback", e);
+                                            crate::audio::audio_processing::resample_audio(&mixed_with_gain, self.sample_rate, 16000)
+                                        }
+                                    }
+                                } else {
+                                    crate::audio::audio_processing::resample_audio(&mixed_with_gain, self.sample_rate, 16000)
                                 };
 
                                 if !samples_16k.is_empty() {
@@ -869,7 +927,7 @@ impl AudioPipeline {
                                         sample_rate: 16000,
                                         timestamp: chunk.timestamp,
                                         chunk_id: self.chunk_id_counter,
-                                        device_type: DeviceType::Microphone, // Mixed audio
+                                        device_type: dominant_device.clone(),
                                     };
 
                                     if let Err(e) = self.transcription_sender.send(transcription_chunk) {
@@ -878,9 +936,9 @@ impl AudioPipeline {
                                         self.chunk_id_counter += 1;
                                     }
                                 }
-                            } else {
+                            } else if let Some(ref mut vad) = self.vad_processor {
                                 // BATCH / LOCAL VAD MODE (Whisper / Parakeet)
-                                match self.vad_processor.process_audio(&mixed_with_gain) {
+                                match vad.process_audio(&mixed_with_gain) {
                                     Ok(speech_segments) => {
                                         for segment in speech_segments {
                                             let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
@@ -894,7 +952,7 @@ impl AudioPipeline {
                                                     sample_rate: 16000,
                                                     timestamp: segment.start_timestamp_ms / 1000.0,
                                                     chunk_id: self.chunk_id_counter,
-                                                    device_type: DeviceType::Microphone, // Mixed audio
+                                                    device_type: dominant_device.clone(),
                                                 };
 
                                                 if let Err(e) = self.transcription_sender.send(transcription_chunk) {
@@ -950,37 +1008,39 @@ impl AudioPipeline {
         info!("Flushing remaining audio from pipeline (processed {} chunks)", self.processed_chunks);
 
         // Flush any remaining audio from VAD processor and send segments to transcription
-        match self.vad_processor.flush() {
-            Ok(final_segments) => {
-                for segment in final_segments {
-                    let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
+        if let Some(ref mut vad) = self.vad_processor {
+            match vad.flush() {
+                Ok(final_segments) => {
+                    for segment in final_segments {
+                        let duration_ms = segment.end_timestamp_ms - segment.start_timestamp_ms;
 
-                    // Send segments >= 50ms (800 samples at 16kHz) - matches main pipeline filter
-                    if segment.samples.len() >= 800 {
-                        info!("📤 Sending final VAD segment to Whisper: {:.1}ms duration, {} samples",
-                              duration_ms, segment.samples.len());
+                        // Send segments >= 50ms (800 samples at 16kHz) - matches main pipeline filter
+                        if segment.samples.len() >= 800 {
+                            info!("📤 Sending final VAD segment to Whisper: {:.1}ms duration, {} samples",
+                                  duration_ms, segment.samples.len());
 
-                        let transcription_chunk = AudioChunk {
-                            data: segment.samples,
-                            sample_rate: 16000,
-                            timestamp: segment.start_timestamp_ms / 1000.0,
-                            chunk_id: self.chunk_id_counter,
-                            device_type: DeviceType::Microphone,
-                        };
+                            let transcription_chunk = AudioChunk {
+                                data: segment.samples,
+                                sample_rate: 16000,
+                                timestamp: segment.start_timestamp_ms / 1000.0,
+                                chunk_id: self.chunk_id_counter,
+                                device_type: DeviceType::Microphone,
+                            };
 
-                        if let Err(e) = self.transcription_sender.send(transcription_chunk) {
-                            warn!("Failed to send final VAD segment: {}", e);
+                            if let Err(e) = self.transcription_sender.send(transcription_chunk) {
+                                warn!("Failed to send final VAD segment: {}", e);
+                            } else {
+                                self.chunk_id_counter += 1;
+                            }
                         } else {
-                            self.chunk_id_counter += 1;
+                            info!("⏭️ Skipping short final segment: {:.1}ms ({} samples < 800)",
+                                  duration_ms, segment.samples.len());
                         }
-                    } else {
-                        info!("⏭️ Skipping short final segment: {:.1}ms ({} samples < 800)",
-                              duration_ms, segment.samples.len());
                     }
                 }
-            }
-            Err(e) => {
-                warn!("Failed to flush VAD processor: {}", e);
+                Err(e) => {
+                    warn!("Failed to flush VAD processor: {}", e);
+                }
             }
         }
 

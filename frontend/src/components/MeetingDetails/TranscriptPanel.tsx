@@ -96,6 +96,7 @@ export function TranscriptPanel({
       confidence: t.confidence,
       speakerId: t.speaker_id,
       speakerName: t.speaker_name,
+      speakerChannel: t.speaker_channel,
     }));
   }, [transcripts, usePagination, segments]);
 

@@ -71,12 +71,12 @@ export function useScreenRecording() {
         return false;
       }
 
-      console.log("🎥 Requesting screen capture permissions...");
+      console.log("🎥 Requesting screen capture permissions (720p @ 30fps)...");
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
-          frameRate: { ideal: 15, max: 30 },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
+          frameRate: { ideal: 30, max: 30 },
+          width: { ideal: 1280, max: 1280 },
+          height: { ideal: 720, max: 720 },
         },
         audio: false, // Audio is handled natively by Rust CPAL for higher quality & dual channels
       });
@@ -84,17 +84,19 @@ export function useScreenRecording() {
       // Detect supported mimeType
       let mimeType = "video/webm";
       if (typeof MediaRecorder !== "undefined") {
-        if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {
-          mimeType = "video/webm;codecs=vp9,opus";
+        if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
+          // VP8 is significantly lighter on CPU hardware decoders/encoders than VP9
+          mimeType = "video/webm;codecs=vp8";
         } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) {
           mimeType = "video/webm;codecs=vp9";
-        } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
-          mimeType = "video/webm;codecs=vp8";
         }
       }
 
-      console.log(`🎥 Initializing MediaRecorder with mimeType: ${mimeType}`);
-      const recorder = new MediaRecorder(stream, { mimeType });
+      console.log(`🎥 Initializing MediaRecorder with mimeType: ${mimeType} (720p @ 30fps, 1.8Mbps)`);
+      const recorder = new MediaRecorder(stream, {
+        mimeType,
+        videoBitsPerSecond: 1_800_000, // 1.8 Mbps - balanced for crisp 720p while preventing CPU encoder spikes
+      });
       globalRecordedChunks = [];
 
       recorder.ondataavailable = (event: BlobEvent) => {

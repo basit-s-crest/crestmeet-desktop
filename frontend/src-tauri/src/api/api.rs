@@ -1258,7 +1258,13 @@ pub async fn api_save_transcript<R: Runtime>(
                     tracing::warn!("Post-meeting diarization failed for {}: {}", mid_clone, e);
                 }
 
-                // 2. Trigger RAG knowledge base indexing and late-bound action item extraction
+                // 2. Automatically run screen OCR name resolution on candidate video speech frames
+                let ocr_engine = crate::speakers::ocr::OcrNamingEngine::new();
+                if let Err(e) = ocr_engine.process_meeting(&pool_clone, &mid_clone, Some(&app_clone)).await {
+                    tracing::warn!("Post-meeting screen OCR naming failed for {}: {}", mid_clone, e);
+                }
+
+                // 3. Trigger RAG knowledge base indexing and late-bound action item extraction
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(5))
                     .build();
@@ -1272,13 +1278,18 @@ pub async fn api_save_transcript<R: Runtime>(
                     }
                 }
 
-                let mut cmd = std::process::Command::new("uv");
+                let mut cmd = tokio::process::Command::new("uv");
                 cmd.args(["run", "python", "-m", "crestmeet_rag.indexing", &mid_clone]);
                 let rag_path = std::path::Path::new("services/rag_service");
                 if rag_path.exists() {
                     cmd.current_dir(rag_path);
                 }
-                let _ = cmd.output();
+                #[cfg(target_os = "windows")]
+                {
+                    const CREATE_NO_WINDOW: u32 = 0x08000000;
+                    cmd.creation_flags(CREATE_NO_WINDOW);
+                }
+                let _ = cmd.output().await;
             });
 
             Ok(serde_json::json!({

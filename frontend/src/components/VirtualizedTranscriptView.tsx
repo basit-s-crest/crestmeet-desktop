@@ -118,101 +118,182 @@ function renderHighlightedText(text: string, terms: string[]) {
     });
 }
 
-// Memoized transcript segment component
-const TranscriptSegment = memo(function TranscriptSegment({
-    id,
-    timestamp,
-    text,
-    confidence,
-    isStreaming,
-    showConfidence,
-    isHighlighted = false,
-    highlightTerms = [],
-    speakerName,
-    speakerChannel,
-}: {
+export interface SpeakerTurn {
     id: string;
+    speakerName: string;
+    speakerChannel: 'mic' | 'system';
+    speakerId?: string;
     timestamp: number;
+    endTime?: number;
     text: string;
+    segmentIds: string[];
     confidence?: number;
-    isStreaming: boolean;
-    showConfidence: boolean;
     isHighlighted?: boolean;
+    isStreaming?: boolean;
+}
+
+// Group consecutive segments from the same speaker into conversational turn cards
+export function groupSegmentsIntoTurns(
+    segments: TranscriptSegmentData[],
+    highlightedSegmentId: string | null,
+    streamingSegmentId: string | null,
+    getDisplayText: (seg: TranscriptSegmentData) => string
+): SpeakerTurn[] {
+    const turns: SpeakerTurn[] = [];
+    if (!segments || segments.length === 0) return turns;
+
+    let currentTurn: SpeakerTurn | null = null;
+
+    for (const seg of segments) {
+        const isMic = seg.speakerChannel === 'mic' ||
+            (seg.speakerName?.toLowerCase().includes('you') || seg.speakerName?.toLowerCase().includes('mic'));
+        const channel: 'mic' | 'system' = isMic ? 'mic' : 'system';
+        const defaultName = isMic ? 'You (Microphone)' : 'Speaker 1';
+        const name = seg.speakerName?.trim() || defaultName;
+
+        const isSegHighlighted = Boolean(highlightedSegmentId && (highlightedSegmentId === seg.id || highlightedSegmentId === `seg_${seg.id}`));
+        const isSegStreaming = Boolean(streamingSegmentId && streamingSegmentId === seg.id);
+        const segRawText = getDisplayText(seg);
+        const segText = cleanStopWords(segRawText).trim();
+
+        if (currentTurn && currentTurn.speakerName === name && currentTurn.speakerChannel === channel) {
+            currentTurn.segmentIds.push(seg.id);
+            if (seg.endTime) {
+                currentTurn.endTime = seg.endTime;
+            }
+            if (segText) {
+                currentTurn.text = currentTurn.text ? `${currentTurn.text} ${segText}` : segText;
+            }
+            if (isSegHighlighted) {
+                currentTurn.isHighlighted = true;
+            }
+            if (isSegStreaming) {
+                currentTurn.isStreaming = true;
+            }
+        } else {
+            currentTurn = {
+                id: `turn-${seg.id}`,
+                speakerName: name,
+                speakerChannel: channel,
+                speakerId: seg.speakerId,
+                timestamp: seg.timestamp ?? 0,
+                endTime: seg.endTime,
+                text: segText,
+                segmentIds: [seg.id],
+                confidence: seg.confidence,
+                isHighlighted: isSegHighlighted,
+                isStreaming: isSegStreaming,
+            };
+            turns.push(currentTurn);
+        }
+    }
+
+    return turns;
+}
+
+// Memoized turn card component (Fireflies, Fathom & Otter style)
+const SpeakerTurnCard = memo(function SpeakerTurnCard({
+    turn,
+    isNextSameSpeaker,
+    showConfidence,
+    highlightTerms = [],
+}: {
+    turn: SpeakerTurn;
+    isNextSameSpeaker?: boolean;
+    showConfidence: boolean;
     highlightTerms?: string[];
-    speakerName?: string;
-    speakerChannel?: 'mic' | 'system';
 }) {
-    const displayText = cleanStopWords(text) || (text.trim() === '' ? '[Silence]' : text);
+    const isMic = turn.speakerChannel === 'mic';
+    const displayText = turn.text.trim() === '' ? '[Silence]' : turn.text;
 
     return (
-        <div
-            id={`segment-${id}`}
-            className={`mb-3 transition-all duration-500 rounded-xl p-2 ${
-                isHighlighted
-                    ? 'ring-2 ring-indigo-500 bg-indigo-50/90 dark:bg-indigo-950/60 shadow-md'
-                    : ''
-            }`}
-        >
-            {isHighlighted && (
-                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-ping" />
-                    <span>Cited Excerpt • {formatRecordingTime(timestamp)}</span>
-                </div>
-            )}
-            <div className="flex items-start gap-2">
-                <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <button
-                                type="button"
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (typeof window !== 'undefined' && typeof timestamp === 'number') {
-                                        window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: timestamp } }));
-                                    }
-                                }}
-                                className="text-xs text-gray-400 hover:text-blue-600 hover:bg-blue-50 px-1 py-0.5 rounded font-mono transition-colors min-w-[50px] text-left cursor-pointer group"
-                            >
-                                <span className="group-hover:underline">{formatRecordingTime(timestamp)}</span>
-                            </button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            <div className="space-y-1">
-                                <p className="text-xs">Click to jump video to this moment</p>
-                                {confidence !== undefined && showConfidence && (
-                                    <ConfidenceIndicator confidence={confidence} showIndicator={showConfidence} />
-                                )}
-                            </div>
-                        </TooltipContent>
-                    </Tooltip>
+        <div id={`turn-${turn.id}`} className="mb-2">
+            <div
+                className={`transition-all duration-300 rounded-2xl border shadow-xs hover:shadow-sm ${
+                    turn.isHighlighted
+                        ? 'ring-2 ring-indigo-500 bg-indigo-50/90 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-800'
+                        : isMic
+                        ? 'border-blue-200/80 bg-blue-50/35 dark:border-blue-900/40 dark:bg-blue-950/20'
+                        : 'border-purple-200/80 bg-purple-50/25 dark:border-purple-900/40 dark:bg-purple-950/20'
+                }`}
+            >
+                {/* Cited Excerpt badge if cited */}
+                {turn.isHighlighted && (
+                    <div className="px-4 pt-2.5 pb-0 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-ping" />
+                        <span>Cited Excerpt • {formatRecordingTime(turn.timestamp)}</span>
+                    </div>
+                )}
 
-                    {speakerName && (
-                        <SpeakerChip
-                            speakerName={speakerName}
-                            channel={speakerChannel}
-                            compact
-                            showEditOnHover={false}
-                        />
-                    )}
-                </div>
-                <div className="flex-1">
-                    {isStreaming ? (
-                        <div className="bg-gray-100 border border-gray-200 rounded-lg px-3 py-2">
-                            <p className="text-base text-gray-800 leading-relaxed">
-                                {isHighlighted && highlightTerms.length > 0
-                                    ? renderHighlightedText(displayText, highlightTerms)
-                                    : displayText}
-                            </p>
+                {/* Header: 👤 Speaker Name / Chip on left, [01:15] on right */}
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100/90 dark:border-zinc-800/60 bg-white/40 dark:bg-zinc-900/30 rounded-t-2xl">
+                    <div className="flex items-center gap-2">
+                        <div
+                            className={`w-6 h-6 rounded-full flex items-center justify-center text-xs select-none ${
+                                isMic
+                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/60 dark:text-blue-300'
+                                    : 'bg-purple-100 text-purple-700 dark:bg-purple-900/60 dark:text-purple-300'
+                            }`}
+                        >
+                            👤
                         </div>
-                    ) : (
-                        <p className="text-base text-gray-800 leading-relaxed">
-                            {isHighlighted && highlightTerms.length > 0
-                                ? renderHighlightedText(displayText, highlightTerms)
-                                : displayText}
-                        </p>
-                    )}
+
+                        <SpeakerChip
+                            speakerName={turn.speakerName}
+                            channel={turn.speakerChannel}
+                            clusterKey={turn.speakerId}
+                            compact={true}
+                            showEditOnHover={true}
+                        />
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <button
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (typeof window !== 'undefined' && typeof turn.timestamp === 'number') {
+                                            window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: turn.timestamp } }));
+                                        }
+                                    }}
+                                    className="text-xs text-gray-400 hover:text-blue-600 dark:text-zinc-500 dark:hover:text-blue-400 font-mono font-medium px-1.5 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer group"
+                                >
+                                    <span className="group-hover:underline">{formatRecordingTime(turn.timestamp)}</span>
+                                </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                                <div className="space-y-1">
+                                    <p className="text-xs">Click to jump video to this moment</p>
+                                    {turn.confidence !== undefined && showConfidence && (
+                                        <ConfidenceIndicator confidence={turn.confidence} showIndicator={showConfidence} />
+                                    )}
+                                </div>
+                            </TooltipContent>
+                        </Tooltip>
+                    </div>
+                </div>
+
+                {/* Body: Transcript Text */}
+                <div className="px-4 py-3">
+                    <p className={`text-base leading-relaxed text-gray-800 dark:text-zinc-100 font-normal ${
+                        turn.isStreaming ? 'animate-pulse' : ''
+                    }`}>
+                        &ldquo;{turn.isHighlighted && highlightTerms.length > 0
+                            ? renderHighlightedText(displayText, highlightTerms)
+                            : displayText}&rdquo;
+                    </p>
                 </div>
             </div>
+
+            {/* Turn transition indicator (▼) between consecutive different speaker turns */}
+            {!isNextSameSpeaker && (
+                <div className="flex flex-col items-center justify-center py-1.5 select-none opacity-50 hover:opacity-100 transition-opacity">
+                    <div className="w-px h-2 bg-gray-300 dark:bg-zinc-700" />
+                    <span className="text-[11px] text-gray-400 dark:text-zinc-500 font-bold -mt-0.5 leading-none">▼</span>
+                </div>
+            )}
         </div>
     );
 });
@@ -267,30 +348,6 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     // Force re-render without flushSync (avoids React warning)
     const [, rerender] = useReducer((x: number) => x + 1, 0);
 
-    // Setup virtualizer for efficient rendering of large lists
-    const virtualizer = useVirtualizer({
-        count: segments.length,
-        getScrollElement: () => scrollRef.current,
-        estimateSize: () => 60, // Estimated height per segment
-        overscan: 10, // Render extra items above/below viewport
-        onChange: () => {
-            startTransition(() => {
-                rerender();
-            });
-        },
-    });
-
-    // Custom hook for auto-scrolling (supports both virtualized and non-virtualized)
-    useAutoScroll({
-        scrollRef,
-        segments,
-        isRecording,
-        isPaused,
-        virtualizer,
-        virtualizationThreshold: VIRTUALIZATION_THRESHOLD,
-        disableAutoScroll,
-    });
-
     // Streaming text effect hook (typewriter animation for new transcripts)
     const { streamingSegmentId, getDisplayText } = useTranscriptStreaming(
         segments,
@@ -303,9 +360,38 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
         return extractKeywords(highlightQuery);
     }, [highlightQuery]);
 
+    // Group segments into turn cards (Fireflies/Fathom/Otter style)
+    const turns = useMemo(() => {
+        return groupSegmentsIntoTurns(segments, highlightedSegmentId, streamingSegmentId, getDisplayText);
+    }, [segments, highlightedSegmentId, streamingSegmentId, getDisplayText]);
+
+    // Setup virtualizer for efficient rendering of large turn lists
+    const virtualizer = useVirtualizer({
+        count: turns.length,
+        getScrollElement: () => scrollRef.current,
+        estimateSize: () => 110, // Estimated height per turn card
+        overscan: 6, // Render extra items above/below viewport
+        onChange: () => {
+            startTransition(() => {
+                rerender();
+            });
+        },
+    });
+
+    // Custom hook for auto-scrolling (supports both virtualized and non-virtualized)
+    useAutoScroll({
+        scrollRef,
+        segments: turns,
+        isRecording,
+        isPaused,
+        virtualizer,
+        virtualizationThreshold: VIRTUALIZATION_THRESHOLD,
+        disableAutoScroll,
+    });
+
     // Handle deep-link initial timestamp navigation & highlighting
     useEffect(() => {
-        if (typeof initialTimestamp !== 'number' || segments.length === 0 || hasScrolledInitialRef.current) {
+        if (typeof initialTimestamp !== 'number' || turns.length === 0 || hasScrolledInitialRef.current) {
             return;
         }
 
@@ -313,99 +399,61 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 
         let targetIndex = -1;
 
-        // 1. If we have search terms, search for the best matching utterance inside/around the chunk window
+        // 1. If we have search terms, search for the best matching turn inside/around the chunk window
         if (highlightTerms.length > 0) {
-            const windowStart = Math.max(0, initialTimestamp - 15);
-            const windowEnd = (typeof initialEndTimestamp === 'number' && initialEndTimestamp > initialTimestamp)
-                ? initialEndTimestamp + 20
-                : initialTimestamp + 180;
-
             let bestScore = 0;
-            let bestIndexInWindow = -1;
+            turns.forEach((turn, idx) => {
+                const turnTextLower = turn.text.toLowerCase();
+                let score = 0;
 
-            segments.forEach((seg, idx) => {
-                const t = seg.timestamp ?? 0;
-                if (t >= windowStart && t <= windowEnd) {
-                    const segTextLower = seg.text.toLowerCase();
-                    let score = 0;
+                // Exact phrase match
+                if (highlightQuery && turnTextLower.includes(highlightQuery.toLowerCase().trim())) {
+                    score += 100;
+                }
 
-                    // Exact phrase match
-                    if (highlightQuery && segTextLower.includes(highlightQuery.toLowerCase().trim())) {
-                        score += 100;
+                // Keyword matches
+                for (const term of highlightTerms) {
+                    if (turnTextLower.includes(term)) {
+                        score += term.length >= 4 ? 30 : 15;
                     }
+                }
 
-                    // Keyword matches
-                    for (const term of highlightTerms) {
-                        if (segTextLower.includes(term)) {
-                            score += term.length >= 4 ? 30 : 15;
-                        }
-                    }
-
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestIndexInWindow = idx;
-                    }
+                if (score > bestScore) {
+                    bestScore = score;
+                    targetIndex = idx;
                 }
             });
-
-            if (bestIndexInWindow !== -1 && bestScore > 0) {
-                targetIndex = bestIndexInWindow;
-            } else {
-                // If not found in chunk window, search all segments across the entire meeting
-                let bestGlobalScore = 0;
-                let bestGlobalIndex = -1;
-                segments.forEach((seg, idx) => {
-                    const segTextLower = seg.text.toLowerCase();
-                    let score = 0;
-                    if (highlightQuery && segTextLower.includes(highlightQuery.toLowerCase().trim())) {
-                        score += 100;
-                    }
-                    for (const term of highlightTerms) {
-                        if (segTextLower.includes(term)) {
-                            score += term.length >= 4 ? 30 : 15;
-                        }
-                    }
-                    if (score > bestGlobalScore) {
-                        bestGlobalScore = score;
-                        bestGlobalIndex = idx;
-                    }
-                });
-
-                if (bestGlobalIndex !== -1 && bestGlobalScore > 0) {
-                    targetIndex = bestGlobalIndex;
-                }
-            }
         }
 
-        // 2. Fallback: closest segment to initialTimestamp
+        // 2. Fallback: closest turn to initialTimestamp
         if (targetIndex === -1) {
-            targetIndex = segments.findIndex((seg) => {
-                const start = seg.timestamp ?? 0;
-                const end = seg.endTime ?? (start + 15);
+            targetIndex = turns.findIndex((turn) => {
+                const start = turn.timestamp ?? 0;
+                const end = turn.endTime ?? (start + 15);
                 return initialTimestamp >= start && initialTimestamp <= end;
             });
         }
 
         if (targetIndex === -1) {
-            targetIndex = segments.reduce((bestIdx, seg, idx) => {
-                const diff = Math.abs((seg.timestamp ?? 0) - initialTimestamp);
-                const bestDiff = Math.abs((segments[bestIdx].timestamp ?? 0) - initialTimestamp);
+            targetIndex = turns.reduce((bestIdx, turn, idx) => {
+                const diff = Math.abs((turn.timestamp ?? 0) - initialTimestamp);
+                const bestDiff = Math.abs((turns[bestIdx].timestamp ?? 0) - initialTimestamp);
                 return diff < bestDiff ? idx : bestIdx;
             }, 0);
         }
 
-        const matchedSegment = segments[targetIndex];
-        if (matchedSegment) {
-            setHighlightedSegmentId(matchedSegment.id);
+        const matchedTurn = turns[targetIndex];
+        if (matchedTurn) {
+            setHighlightedSegmentId(matchedTurn.segmentIds[0] || null);
 
             // Seek video directly to the matched utterance timestamp!
-            const seekTime = matchedSegment.timestamp ?? initialTimestamp;
+            const seekTime = matchedTurn.timestamp ?? initialTimestamp;
 
             const timer = setTimeout(() => {
-                if (segments.length >= VIRTUALIZATION_THRESHOLD && virtualizer) {
+                if (turns.length >= VIRTUALIZATION_THRESHOLD && virtualizer) {
                     virtualizer.scrollToIndex(targetIndex, { align: 'center', behavior: 'smooth' });
                 } else {
-                    const el = document.getElementById(`segment-${matchedSegment.id}`);
+                    const el = document.getElementById(`turn-${matchedTurn.id}`);
                     el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 }
 
@@ -424,7 +472,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 clearTimeout(clearTimer);
             };
         }
-    }, [initialTimestamp, initialEndTimestamp, highlightTerms, highlightQuery, segments, virtualizer]);
+    }, [initialTimestamp, initialEndTimestamp, highlightTerms, highlightQuery, turns, virtualizer]);
 
     // Infinite scroll: IntersectionObserver to trigger loading more
     useEffect(() => {
@@ -483,14 +531,14 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
     }, [onLoadMore, hasMore, isLoadingMore, isRecording]);
 
     // Use simple rendering for small lists, virtualization for large lists
-    const useVirtualization = segments.length >= VIRTUALIZATION_THRESHOLD;
+    const useVirtualization = turns.length >= VIRTUALIZATION_THRESHOLD;
 
     return (
         <div ref={scrollRef} className="flex flex-col h-full overflow-y-auto px-4 py-2">
             {/* Recording Status Bar - Sticky at top, always visible when recording */}
             <AnimatePresence>
                 {isRecording && (
-                    <div className="sticky top-0 z-10 bg-white pb-2">
+                    <div className="sticky top-0 z-10 bg-white dark:bg-zinc-900 pb-2">
                         <RecordingStatusBar isPaused={isPaused} />
                     </div>
                 )}
@@ -498,7 +546,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
 
             {/* Content - add padding when recording to prevent overlap */}
             <div className={isRecording ? 'pt-2' : ''}>
-            {segments.length === 0 ? (
+            {turns.length === 0 ? (
                 // Empty state
                 <motion.div
                     initial={{ opacity: 0 }}
@@ -515,13 +563,13 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                     'bg-amber-400 animate-pulse'
                                 }`}></div>
                             </div>
-                            <p className="text-sm font-medium text-gray-700">
+                            <p className="text-sm font-medium text-gray-700 dark:text-zinc-300">
                                 {isPaused ? 'Recording paused' :
                                  sttStatus === 'connected' ? 'STT Live • Listening for speech...' :
                                  sttStatus === 'error' ? 'Speech-to-Text Connection Error' :
                                  'Connecting to STT stream...'}
                             </p>
-                            <p className="text-xs mt-1 text-gray-400">
+                            <p className="text-xs mt-1 text-gray-400 dark:text-zinc-500">
                                 {isPaused ? 'Click resume to continue recording' :
                                  sttStatus === 'connected' ? 'Speak clearly — your transcription will appear live' :
                                  'Establishing audio stream connection...'}
@@ -529,8 +577,8 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         </>
                     ) : (
                         <>
-                            <p className="text-lg font-semibold">Welcome to CrestMeet!</p>
-                            <p className="text-xs mt-1">Start recording to see live transcription</p>
+                            <p className="text-lg font-semibold text-gray-800 dark:text-zinc-200">Welcome to CrestMeet!</p>
+                            <p className="text-xs mt-1 text-gray-400 dark:text-zinc-500">Start recording to see live transcription</p>
                         </>
                     )}
                 </motion.div>
@@ -545,12 +593,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                         }}
                     >
                         {virtualizer.getVirtualItems().map((virtualRow) => {
-                            const segment = segments[virtualRow.index];
-                            const isStreaming = streamingSegmentId === segment.id;
+                            const turn = turns[virtualRow.index];
 
                             return (
                                 <div
-                                    key={segment.id}
+                                    key={turn.id}
                                     data-index={virtualRow.index}
                                     ref={virtualizer.measureElement}
                                     style={{
@@ -561,17 +608,11 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                                         transform: `translateY(${virtualRow.start}px)`,
                                     }}
                                 >
-                                    <TranscriptSegment
-                                        id={segment.id}
-                                        timestamp={segment.timestamp}
-                                        text={getDisplayText(segment)}
-                                        confidence={segment.confidence}
-                                        isStreaming={isStreaming}
+                                    <SpeakerTurnCard
+                                        turn={turn}
+                                        isNextSameSpeaker={virtualRow.index === turns.length - 1}
                                         showConfidence={showConfidence}
-                                        isHighlighted={highlightedSegmentId === segment.id}
-                                        highlightTerms={highlightedSegmentId === segment.id ? highlightTerms : []}
-                                        speakerName={segment.speakerName}
-                                        speakerChannel={segment.speakerChannel}
+                                        highlightTerms={highlightTerms}
                                     />
                                 </div>
                             );
@@ -579,7 +620,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     </div>
 
                     {/* Infinite scroll trigger and loading indicator */}
-                    {(hasMore || isLoadingMore) && !isRecording && segments.length > 0 && (
+                    {(hasMore || isLoadingMore) && !isRecording && turns.length > 0 && (
                         <div ref={loadMoreTriggerRef} className="flex justify-center items-center py-4 mt-2">
                             {isLoadingMore ? (
                                 <div className="flex items-center gap-2 text-gray-500">
@@ -595,7 +636,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     )}
 
                     {/* Listening indicator when recording */}
-                    {!isStopping && isRecording && !isPaused && !isProcessing && segments.length > 0 && (
+                    {!isStopping && isRecording && !isPaused && !isProcessing && turns.length > 0 && (
                         <motion.div
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
@@ -611,27 +652,19 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                 // Simple rendering for small lists (better animations)
                 <>
                     <div className="space-y-1">
-                        {segments.map((segment) => {
-                            const isStreaming = streamingSegmentId === segment.id;
-
+                        {turns.map((turn, idx) => {
                             return (
                                 <motion.div
-                                    key={segment.id}
+                                    key={turn.id}
                                     initial={{ opacity: 0, y: 5 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ duration: 0.15 }}
                                 >
-                                    <TranscriptSegment
-                                        id={segment.id}
-                                        timestamp={segment.timestamp}
-                                        text={getDisplayText(segment)}
-                                        confidence={segment.confidence}
-                                        isStreaming={isStreaming}
+                                    <SpeakerTurnCard
+                                        turn={turn}
+                                        isNextSameSpeaker={idx === turns.length - 1}
                                         showConfidence={showConfidence}
-                                        isHighlighted={highlightedSegmentId === segment.id}
-                                        highlightTerms={highlightedSegmentId === segment.id ? highlightTerms : []}
-                                        speakerName={segment.speakerName}
-                                        speakerChannel={segment.speakerChannel}
+                                        highlightTerms={highlightTerms}
                                     />
                                 </motion.div>
                             );
@@ -639,7 +672,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     </div>
 
                     {/* Infinite scroll trigger (for small lists that grow) */}
-                    {(hasMore || isLoadingMore) && !isRecording && segments.length > 0 && (
+                    {(hasMore || isLoadingMore) && !isRecording && turns.length > 0 && (
                         <div ref={loadMoreTriggerRef} className="flex justify-center items-center py-4 mt-2">
                             {isLoadingMore ? (
                                 <div className="flex items-center gap-2 text-gray-500">
@@ -655,7 +688,7 @@ export const VirtualizedTranscriptView: React.FC<VirtualizedTranscriptViewProps>
                     )}
 
                     {/* Listening indicator when recording */}
-                    {!isStopping && isRecording && !isPaused && !isProcessing && segments.length > 0 && (
+                    {!isStopping && isRecording && !isPaused && !isProcessing && turns.length > 0 && (
                         <motion.div
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}

@@ -8,8 +8,9 @@ use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
@@ -63,7 +64,7 @@ pub async fn start_deepgram_live_session<R: Runtime>(
     mut chunk_receiver: mpsc::UnboundedReceiver<AudioChunk>,
 ) -> Result<()> {
     LIVE_SPEECH_DETECTED.store(false, Ordering::SeqCst);
-    LIVE_SEQUENCE_COUNTER.store(0, Ordering::SeqCst);
+    LIVE_SEQUENCE_COUNTER.store(1, Ordering::SeqCst);
 
     let trimmed_key = api_key.trim().to_string();
     if trimmed_key.is_empty() {
@@ -146,6 +147,11 @@ pub async fn start_deepgram_live_session<R: Runtime>(
 
     let (mut ws_write, mut ws_read) = ws_stream.split();
 
+    // Shared channel history to tag transcripts with mic vs system audio
+    let channel_history = Arc::new(StdMutex::new(VecDeque::<(f64, f64, String)>::new()));
+    let channel_history_feeder = channel_history.clone();
+    let channel_history_reader = channel_history.clone();
+
     // Internal channel between audio receiver and WebSocket writer
     let (audio_tx, mut audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let is_recording_active = Arc::new(AtomicBool::new(true));
@@ -155,9 +161,31 @@ pub async fn start_deepgram_live_session<R: Runtime>(
     let audio_feeder_handle = tokio::spawn(async move {
         info!("🎙️ Audio feeder task active, reading from audio pipeline");
         let mut total_chunks = 0u64;
+        let mut stream_time = 0.0f64;
         while let Some(chunk) = chunk_receiver.recv().await {
             if !chunk.data.is_empty() {
                 total_chunks += 1;
+                let chunk_dur = chunk.data.len() as f64 / 16000.0;
+                let c_start = stream_time;
+                let c_end = stream_time + chunk_dur;
+                stream_time += chunk_dur;
+
+                let channel_tag = match chunk.device_type {
+                    crate::audio::recording_state::DeviceType::System => "system".to_string(),
+                    _ => "mic".to_string(),
+                };
+
+                if let Ok(mut hist) = channel_history_feeder.lock() {
+                    hist.push_back((c_start, c_end, channel_tag));
+                    while let Some(front) = hist.front() {
+                        if stream_time - front.1 > 120.0 {
+                            hist.pop_front();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
                 let pcm_bytes = pcm_f32_to_linear16(&chunk.data);
                 if total_chunks % 10 == 1 {
                     info!("📤 Feeder forwarded chunk #{} ({} samples, {} bytes) to Deepgram", total_chunks, chunk.data.len(), pcm_bytes.len());
@@ -193,11 +221,11 @@ pub async fn start_deepgram_live_session<R: Runtime>(
                             }
                         }
                         None => {
-                            // Channel closed: send CloseStream to Deepgram and wait generously for final transcriptions
+                            // Channel closed: send CloseStream to Deepgram and wait briefly for final transcriptions
                             info!("Audio queue exhausted. Sending CloseStream to Deepgram...");
                             let close_msg = serde_json::json!({ "type": "CloseStream" }).to_string();
                             let _ = ws_write.send(Message::Text(close_msg)).await;
-                            tokio::time::sleep(Duration::from_millis(1500)).await;
+                            tokio::time::sleep(Duration::from_millis(600)).await;
                             let _ = ws_write.close().await;
                             break;
                         }
@@ -262,12 +290,39 @@ pub async fn start_deepgram_live_session<R: Runtime>(
 
                                         let start = val.get("start").and_then(|s| s.as_f64()).unwrap_or(0.0);
                                         let duration = val.get("duration").and_then(|d| d.as_f64()).unwrap_or(1.0);
+                                        let end = start + duration;
                                         let sequence_id = LIVE_SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+                                        let detected_source = if let Ok(hist) = channel_history_reader.lock() {
+                                            let mut mic_time = 0.0f64;
+                                            let mut sys_time = 0.0f64;
+                                            for (cs, ce, dev) in hist.iter() {
+                                                let overlap_start = start.max(*cs);
+                                                let overlap_end = end.min(*ce);
+                                                if overlap_end > overlap_start {
+                                                    let overlap = overlap_end - overlap_start;
+                                                    if dev == "system" {
+                                                        sys_time += overlap;
+                                                    } else {
+                                                        mic_time += overlap;
+                                                    }
+                                                }
+                                            }
+                                            if sys_time > mic_time {
+                                                "system".to_string()
+                                            } else if mic_time > 0.0 {
+                                                "mic".to_string()
+                                            } else {
+                                                hist.back().map(|b| b.2.clone()).unwrap_or_else(|| "mic".to_string())
+                                            }
+                                        } else {
+                                            "mic".to_string()
+                                        };
 
                                         let update = crate::audio::transcription::worker::TranscriptUpdate {
                                             text: transcript.to_string(),
                                             timestamp: format_current_timestamp(),
-                                            source: "Audio".to_string(),
+                                            source: detected_source,
                                             sequence_id,
                                             chunk_start_time: start,
                                             is_partial: false,
@@ -309,5 +364,6 @@ pub async fn start_deepgram_live_session<R: Runtime>(
     let _ = reader_handle.await;
 
     info!("🏁 Deepgram live streaming session concluded cleanly");
+    let _ = app.emit("transcription-complete", ());
     Ok(())
 }

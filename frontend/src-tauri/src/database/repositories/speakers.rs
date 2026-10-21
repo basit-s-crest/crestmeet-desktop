@@ -194,7 +194,7 @@ impl SpeakersRepository {
             "INSERT INTO meeting_speakers (
                 meeting_id, cluster_key, channel, display_name, name_source, name_confidence, embedding, embedding_model, created_at, updated_at
              )
-             VALUES ($1, $2, $3, $4, 'diarization', 0.85, $5, $6, NOW(), NOW())
+             VALUES ($1, $2, $3, $4, 'channel', 0.85, $5, $6, NOW(), NOW())
              ON CONFLICT (meeting_id, cluster_key) DO UPDATE
              SET embedding = COALESCE(EXCLUDED.embedding, meeting_speakers.embedding),
                  embedding_model = COALESCE(EXCLUDED.embedding_model, meeting_speakers.embedding_model),

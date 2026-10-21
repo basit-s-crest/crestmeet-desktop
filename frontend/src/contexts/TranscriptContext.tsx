@@ -305,6 +305,11 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             return;
           }
 
+          // Determine speaker identity based on detected source channel
+          const isSystem = update.source?.toLowerCase() === 'system';
+          const defaultChannel: 'mic' | 'system' = isSystem ? 'system' : 'mic';
+          const defaultSpeakerName = update.speaker_name || (isSystem ? 'Speaker 1' : 'You (Microphone)');
+
           // Create transcript for buffer with NEW timestamp fields
           const newTranscript: Transcript = {
             id: `${Date.now()}-${transcriptCounter++}`,
@@ -318,6 +323,9 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             audio_start_time: update.audio_start_time,
             audio_end_time: update.audio_end_time,
             duration: update.duration,
+            speaker_id: update.speaker_id,
+            speaker_name: defaultSpeakerName,
+            speaker_channel: defaultChannel,
           };
 
           // Add to buffer

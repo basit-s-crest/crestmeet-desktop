@@ -213,9 +213,8 @@ export function useRecordingStop(
         console.warn('⏰ Transcription wait timeout reached after', elapsedTime, 'ms');
       } else {
         console.log('✅ Transcription completed after', elapsedTime, 'ms');
-        // Wait longer for any late transcript segments (increased from 1s to 4s)
-        console.log('⏳ Waiting for late transcript segments...');
-        await new Promise(resolve => setTimeout(resolve, 4000));
+        // Brief pause for any final state update
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
 
       // Final buffer flush: process ALL remaining transcripts regardless of timing
@@ -236,9 +235,8 @@ export function useRecordingStop(
 
       // NOTE: Status remains PROCESSING_TRANSCRIPTS until we start saving
 
-      // Wait a bit more to ensure all transcript state updates have been processed
-      console.log('Waiting for transcript state updates to complete...');
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Wait a moment to ensure all transcript state updates have been processed
+      await new Promise(resolve => setTimeout(resolve, 200));
 
       // Save to SQLite
       // NOTE: enabled to save COMPLETE transcripts after frontend receives all updates
@@ -270,7 +268,7 @@ export function useRecordingStop(
             if (videoBlob && folderPath) {
               console.log(`🎥 Saving recorded meeting video (${videoBlob.size} bytes) to ${folderPath}...`);
               const buffer = await videoBlob.arrayBuffer();
-              const videoData = Array.from(new Uint8Array(buffer));
+              const videoData = new Uint8Array(buffer);
               await invoke('api_save_meeting_video', { folderPath, videoData });
               console.log('✅ Recorded meeting video saved successfully');
               hasVideo = true;

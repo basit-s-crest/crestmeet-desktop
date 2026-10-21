@@ -18,6 +18,7 @@ export interface Transcript {
   duration?: number;          // Segment duration in seconds (e.g., 3.3)
   speaker_id?: string;
   speaker_name?: string;
+  speaker_channel?: 'mic' | 'system';
 }
 
 
@@ -33,6 +34,9 @@ export interface TranscriptUpdate {
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number;   // Seconds from recording start
   duration: number;          // Segment duration in seconds
+  speaker_id?: string;
+  speaker_name?: string;
+  speaker_channel?: 'mic' | 'system';
 }
 
 export interface Block {

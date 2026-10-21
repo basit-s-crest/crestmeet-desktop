@@ -149,15 +149,15 @@ pub async fn api_merge_meeting_video_and_audio(folder_path: String) -> Result<St
             output_path
         );
 
-        // Transcode meeting video (WebM) + audio into high quality, crisp MP4 (H.264 CRF 20 + AAC 192k)
-        let mut command = std::process::Command::new(&ffmpeg_path);
+        // Transcode meeting video (WebM) + audio into high quality, crisp MP4 with ultrafast preset
+        let mut command = tokio::process::Command::new(&ffmpeg_path);
         command.args(&[
             "-y",
             "-i", v_path.to_str().unwrap(),
             "-i", a_path.to_str().unwrap(),
             "-c:v", "libx264",
-            "-preset", "faster",
-            "-crf", "20",
+            "-preset", "ultrafast",
+            "-crf", "23",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", "192k",
@@ -168,17 +168,16 @@ pub async fn api_merge_meeting_video_and_audio(folder_path: String) -> Result<St
 
         #[cfg(target_os = "windows")]
         {
-            use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             command.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let result = command.output();
+        let result = command.output().await;
         let success = match result {
             Ok(output) if output.status.success() => true,
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                log_warn!("H.264 high-quality compression failed ({}), trying veryfast fallback...", stderr);
+                log_warn!("H.264 ultrafast merge failed ({}), trying veryfast fallback...", stderr);
                 false
             }
             Err(e) => {
@@ -188,15 +187,15 @@ pub async fn api_merge_meeting_video_and_audio(folder_path: String) -> Result<St
         };
 
         if !success {
-            // Fallback: veryfast transcoding with high quality CRF 22
-            let mut fallback_cmd = std::process::Command::new(&ffmpeg_path);
+            // Fallback: veryfast transcoding with CRF 23
+            let mut fallback_cmd = tokio::process::Command::new(&ffmpeg_path);
             fallback_cmd.args(&[
                 "-y",
                 "-i", v_path.to_str().unwrap(),
                 "-i", a_path.to_str().unwrap(),
                 "-c:v", "libx264",
                 "-preset", "veryfast",
-                "-crf", "22",
+                "-crf", "23",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 "-b:a", "192k",
@@ -207,12 +206,11 @@ pub async fn api_merge_meeting_video_and_audio(folder_path: String) -> Result<St
 
             #[cfg(target_os = "windows")]
             {
-                use std::os::windows::process::CommandExt;
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
                 fallback_cmd.creation_flags(CREATE_NO_WINDOW);
             }
 
-            let fallback_output = fallback_cmd.output().map_err(|e| format!("FFmpeg fallback failed: {}", e))?;
+            let fallback_output = fallback_cmd.output().await.map_err(|e| format!("FFmpeg fallback failed: {}", e))?;
             if !fallback_output.status.success() {
                 let stderr = String::from_utf8_lossy(&fallback_output.stderr);
                 log_error!("FFmpeg fallback merge failed: {}", stderr);
