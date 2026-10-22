@@ -149,16 +149,19 @@ pub fn check_microphone_permission() -> (bool, Option<String>) {
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
 
         // Check desktop apps permission
-        let desktop_output = Command::new("reg")
-            .args(&[
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged",
-                "/v",
-                "Value",
-            ])
-            .output();
+        let mut desktop_cmd = Command::new("reg");
+        desktop_cmd.args(&[
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged",
+            "/v",
+            "Value",
+        ]);
+        desktop_cmd.creation_flags(CREATE_NO_WINDOW);
+        let desktop_output = desktop_cmd.output();
 
         if let Ok(output) = desktop_output {
             let text = String::from_utf8_lossy(&output.stdout);
@@ -171,14 +174,15 @@ pub fn check_microphone_permission() -> (bool, Option<String>) {
         }
 
         // Check global microphone permission
-        let global_output = Command::new("reg")
-            .args(&[
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone",
-                "/v",
-                "Value",
-            ])
-            .output();
+        let mut global_cmd = Command::new("reg");
+        global_cmd.args(&[
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone",
+            "/v",
+            "Value",
+        ]);
+        global_cmd.creation_flags(CREATE_NO_WINDOW);
+        let global_output = global_cmd.output();
 
         if let Ok(output) = global_output {
             let text = String::from_utf8_lossy(&output.stdout);
@@ -198,9 +202,13 @@ pub fn check_microphone_permission() -> (bool, Option<String>) {
 pub fn open_microphone_settings() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
-            .args(&["/c", "start", "ms-settings:privacy-microphone"])
-            .spawn()
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(&["/c", "start", "ms-settings:privacy-microphone"]);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.spawn()
             .map_err(|e| format!("Failed to open Windows privacy settings: {}", e))?;
     }
     Ok(())

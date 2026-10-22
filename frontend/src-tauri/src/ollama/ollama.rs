@@ -1,4 +1,3 @@
-use std::process::Command;
 use std::sync::Arc;
 use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
@@ -114,16 +113,7 @@ pub async fn get_ollama_models(endpoint: Option<String>) -> Result<Vec<OllamaMod
                 Ok(models)
             }
         }
-        Ok(Err(http_err)) => {
-            // Only fallback to CLI if endpoint is localhost/empty
-            if is_localhost_endpoint(endpoint.as_deref()) {
-                get_models_via_cli().map_err(|cli_err| {
-                    format!("{}\n\nAlso tried CLI: {}", http_err, cli_err)
-                })
-            } else {
-                Err(http_err)
-            }
-        }
+        Ok(Err(http_err)) => Err(http_err),
         Err(_) => Err(OllamaError::Timeout.to_string()),
     }
 }
@@ -197,45 +187,6 @@ async fn get_models_via_http_async(endpoint: Option<&str>) -> Result<Vec<OllamaM
     }).collect())
 }
 
-fn get_models_via_cli() -> Result<Vec<OllamaModel>, String> {
-    let output = Command::new("ollama")
-        .arg("list")
-        .output()
-        .map_err(|e| {
-            OllamaError::NetworkError(
-                format!("Ollama CLI not found or not in PATH: {}", e)
-            ).to_string()
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(OllamaError::ServerError(
-            format!("Ollama CLI error: {}", stderr)
-        ).to_string());
-    }
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let mut models = Vec::new();
-
-    // Skip the header line
-    for line in output_str.lines().skip(1) {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 4 {
-            models.push(OllamaModel {
-                name: parts[0].to_string(),
-                id: parts[1].to_string(),
-                size: format!("{} {}", parts[2], parts[3]),
-                modified: parts[4..].join(" "),
-            });
-        }
-    }
-
-    if models.is_empty() {
-        return Err(OllamaError::NoModelsFound.to_string());
-    }
-
-    Ok(models)
-}
 
 fn format_size(size: i64) -> String {
     if size < 1024 {

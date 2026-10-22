@@ -10,8 +10,7 @@ import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData, MeetingSpeaker } from "@/types";
 import { listen } from "@tauri-apps/api/event";
-import { SpeakerChip } from "./Speakers/SpeakerChip";
-import { User } from "lucide-react";
+import { User, Mic, Volume2, Sparkles } from "lucide-react";
 
 export interface VirtualizedTranscriptViewProps {
     /** Transcript segments to display */
@@ -49,15 +48,15 @@ export interface VirtualizedTranscriptViewProps {
 // Threshold for enabling virtualization (below this, use simple rendering)
 const VIRTUALIZATION_THRESHOLD = 10;
 
-// Helper function to format seconds as recording-relative time [MM:SS]
+// Helper function to format seconds as recording-relative time MM:SS
 function formatRecordingTime(seconds: number | undefined): string {
-    if (seconds === undefined) return '[--:--]';
+    if (seconds === undefined) return '--:--';
 
     const totalSeconds = Math.floor(seconds);
     const minutes = Math.floor(totalSeconds / 60);
     const secs = totalSeconds % 60;
 
-    return `[${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
+    return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
 // Helper function to remove filler words and repetitions
@@ -209,7 +208,52 @@ export function groupSegmentsIntoTurns(
     return turns;
 }
 
-// Memoized turn card component (Clean, minimal, professional industry-standard)
+// Distinct, harmonious palettes for different speakers
+const SPEAKER_ACCENTS = [
+    {
+        avatarBg: 'bg-violet-50 text-violet-600 dark:bg-violet-950/60 dark:text-violet-400 border border-violet-200/60 dark:border-violet-800/40',
+        badge: 'text-violet-700 dark:text-violet-300 bg-violet-50/80 dark:bg-violet-950/50',
+        borderLeft: 'border-l-violet-500',
+    },
+    {
+        avatarBg: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-800/40',
+        badge: 'text-emerald-700 dark:text-emerald-300 bg-emerald-50/80 dark:bg-emerald-950/50',
+        borderLeft: 'border-l-emerald-500',
+    },
+    {
+        avatarBg: 'bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400 border border-amber-200/60 dark:border-amber-800/40',
+        badge: 'text-amber-700 dark:text-amber-300 bg-amber-50/80 dark:bg-amber-950/50',
+        borderLeft: 'border-l-amber-500',
+    },
+    {
+        avatarBg: 'bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 border border-rose-200/60 dark:border-rose-800/40',
+        badge: 'text-rose-700 dark:text-rose-300 bg-rose-50/80 dark:bg-rose-950/50',
+        borderLeft: 'border-l-rose-500',
+    },
+    {
+        avatarBg: 'bg-cyan-50 text-cyan-600 dark:bg-cyan-950/60 dark:text-cyan-400 border border-cyan-200/60 dark:border-cyan-800/40',
+        badge: 'text-cyan-700 dark:text-cyan-300 bg-cyan-50/80 dark:bg-cyan-950/50',
+        borderLeft: 'border-l-cyan-500',
+    },
+];
+
+function getSpeakerAccent(speakerName: string, isMic: boolean) {
+    if (isMic) {
+        return {
+            avatarBg: 'bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 border border-blue-200/60 dark:border-blue-800/40',
+            badge: 'text-blue-700 dark:text-blue-300 bg-blue-50/80 dark:bg-blue-950/50',
+            borderLeft: 'border-l-blue-500',
+        };
+    }
+    let hash = 0;
+    for (let i = 0; i < speakerName.length; i++) {
+        hash = (hash << 5) - hash + speakerName.charCodeAt(i);
+        hash |= 0;
+    }
+    return SPEAKER_ACCENTS[Math.abs(hash) % SPEAKER_ACCENTS.length];
+}
+
+// Memoized turn card component (Minimal, idea-oriented, professional industry-standard)
 const SpeakerTurnCard = memo(function SpeakerTurnCard({
     turn,
     showConfidence,
@@ -222,46 +266,50 @@ const SpeakerTurnCard = memo(function SpeakerTurnCard({
 }) {
     const isMic = turn.speakerChannel === 'mic';
     const displayText = turn.text.trim() === '' ? '[Silence]' : turn.text;
+    const accent = getSpeakerAccent(turn.speakerName, isMic);
 
     return (
-        <div id={`turn-${turn.id}`} className="mb-3">
+        <div id={`turn-${turn.id}`} className="mb-2.5">
             <div
-                className={`transition-all duration-200 rounded-xl border bg-white dark:bg-zinc-900 shadow-2xs hover:shadow-xs ${
+                className={`transition-all duration-150 rounded-xl bg-white dark:bg-zinc-900 border ${
                     turn.isHighlighted
-                        ? 'ring-2 ring-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-800'
-                        : isMic
-                        ? 'border-gray-200/90 dark:border-zinc-800 border-l-[3.5px] border-l-blue-500'
-                        : 'border-gray-200/90 dark:border-zinc-800 border-l-[3.5px] border-l-purple-500'
-                }`}
+                        ? 'ring-2 ring-indigo-500/80 bg-indigo-50/40 dark:bg-indigo-950/30 border-indigo-300 dark:border-indigo-700 shadow-xs'
+                        : `border-zinc-200/70 dark:border-zinc-800/80 hover:border-zinc-300 dark:hover:border-zinc-700 shadow-2xs hover:shadow-xs border-l-2 ${accent.borderLeft}`
+                } p-3.5`}
             >
                 {/* Cited Excerpt badge if cited */}
                 {turn.isHighlighted && (
-                    <div className="px-3.5 pt-2 pb-0 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                    <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
                         <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 animate-ping" />
                         <span>Cited Excerpt • {formatRecordingTime(turn.timestamp)}</span>
                     </div>
                 )}
 
-                {/* Header: Speaker Avatar & Chip on left, [01:15] Seek Button on right */}
-                <div className="flex items-center justify-between px-3.5 py-2 border-b border-gray-100 dark:border-zinc-800/70 bg-gray-50/40 dark:bg-zinc-900/40 rounded-t-xl">
-                    <div className="flex items-center gap-2">
+                {/* Minimal Meta Row: Speaker Identity & Timestamp */}
+                <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                        {/* Unified, single avatar icon */}
                         <div
-                            className={`w-6 h-6 rounded-full flex items-center justify-center text-xs shrink-0 select-none shadow-2xs ${
-                                isMic
-                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300 border border-blue-200/60 dark:border-blue-800/60'
-                                    : 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300 border border-purple-200/60 dark:border-purple-800/60'
-                            }`}
+                            className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 select-none shadow-2xs ${accent.avatarBg}`}
                         >
-                            <User className="w-3.5 h-3.5" />
+                            {isMic ? (
+                                <Mic className="w-3 h-3" />
+                            ) : (
+                                <Volume2 className="w-3 h-3" />
+                            )}
                         </div>
 
-                        <SpeakerChip
-                            speakerName={turn.speakerName}
-                            channel={turn.speakerChannel}
-                            clusterKey={turn.speakerId}
-                            compact={true}
-                            showEditOnHover={true}
-                        />
+                        {/* Speaker Name */}
+                        <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 tracking-tight truncate">
+                            {turn.speakerName}
+                        </span>
+
+                        {/* Subdued "You" badge if local user */}
+                        {isMic && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/40">
+                                You
+                            </span>
+                        )}
                     </div>
 
                     <div className="flex items-center gap-1.5">
@@ -275,7 +323,7 @@ const SpeakerTurnCard = memo(function SpeakerTurnCard({
                                             window.dispatchEvent(new CustomEvent('crestmeet_seek_video', { detail: { time: turn.timestamp } }));
                                         }
                                     }}
-                                    className="text-xs text-gray-400 hover:text-blue-600 dark:text-zinc-500 dark:hover:text-blue-400 font-mono font-medium px-1.5 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer group"
+                                    className="text-[11px] text-zinc-400 hover:text-blue-600 dark:text-zinc-500 dark:hover:text-blue-400 font-mono font-medium px-1.5 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer group"
                                 >
                                     <span className="group-hover:underline">{formatRecordingTime(turn.timestamp)}</span>
                                 </button>
@@ -292,16 +340,14 @@ const SpeakerTurnCard = memo(function SpeakerTurnCard({
                     </div>
                 </div>
 
-                {/* Body: Clean, unquoted transcript text */}
-                <div className="px-3.5 py-3">
-                    <p className={`text-[13.5px] leading-relaxed text-gray-800 dark:text-zinc-200 font-normal select-text ${
-                        turn.isStreaming ? 'animate-pulse' : ''
-                    }`}>
-                        {turn.isHighlighted && highlightTerms.length > 0
-                            ? renderHighlightedText(displayText, highlightTerms)
-                            : displayText}
-                    </p>
-                </div>
+                {/* Body: Idea-Centric Spoken Text (Natural conversational flow directly under header) */}
+                <p className={`mt-2 text-[14px] leading-relaxed text-zinc-700 dark:text-zinc-200 font-normal select-text ${
+                    turn.isStreaming ? 'animate-pulse' : ''
+                }`}>
+                    {turn.isHighlighted && highlightTerms.length > 0
+                        ? renderHighlightedText(displayText, highlightTerms)
+                        : displayText}
+                </p>
             </div>
         </div>
     );
