@@ -14,14 +14,36 @@ from crestmeet_rag.ocr.schemas import (
 
 
 def compute_string_similarity(a: str, b: str) -> float:
-    """Compute normalized character sequence similarity between two names (0.0 to 1.0)."""
+    """Compute normalized sequence and token-level similarity between two names (0.0 to 1.0)."""
     norm_a = a.strip().lower()
     norm_b = b.strip().lower()
     if not norm_a or not norm_b:
         return 0.0
     if norm_a == norm_b:
         return 1.0
+
+    words_a = set(norm_a.split())
+    words_b = set(norm_b.split())
+
+    # Exact token match (e.g. "Priya" in "Priya Sharma")
+    if words_a and words_b:
+        if words_a.issubset(words_b) or words_b.issubset(words_a):
+            return 0.88
+
+        # First names match
+        first_a = norm_a.split()[0]
+        first_b = norm_b.split()[0]
+        if first_a == first_b and len(first_a) >= 3:
+            return 0.85
+
+    # Sub-phrase match
+    if norm_a in norm_b or norm_b in norm_a:
+        min_len = min(len(norm_a), len(norm_b))
+        max_len = max(len(norm_a), len(norm_b))
+        return max(min_len / max_len, 0.78)
+
     return SequenceMatcher(None, norm_a, norm_b).ratio()
+
 
 
 def fuzzy_match_attendees(

@@ -113,3 +113,53 @@ class VotingSimulationResponse(BaseModel):
     auto_committed_count: int
     suggested_count: int
     unresolved_count: int
+
+
+class MeetingFrameInput(BaseModel):
+    """Candidate video or native screen capture frame."""
+    frame_id: str
+    cluster_key: str
+    timestamp: float
+    image_base64: str
+
+
+class MeetingSegmentInput(BaseModel):
+    """Transcript turn segment with audio timestamps and recognized text."""
+    cluster_key: str
+    start_time: float
+    end_time: float
+    transcript_text: str
+
+
+class ResolveMeetingSpeakersRequest(BaseModel):
+    """Request payload for multi-modal OCR speaker resolution across meeting frames and transcripts."""
+    meeting_id: str
+    frames: List[MeetingFrameInput]
+    segments: List[MeetingSegmentInput] = Field(default_factory=list)
+    attendees: List[str] = Field(default_factory=list)
+    app_preset: AppPreset = AppPreset.GENERIC
+
+
+class ClusterResolution(BaseModel):
+    """Final decision for an individual speaker cluster."""
+    cluster_key: str
+    committed_name: Optional[str] = None
+    suggested_name: Optional[str] = None
+    confidence: float = 0.0
+    evidence_count: int = 0
+    reasons: List[str] = Field(default_factory=list)
+    evidence_types: int = 0
+    raw_ocr_names: List[str] = Field(default_factory=list)
+    runner_up_name: Optional[str] = None
+    runner_up_score: float = 0.0
+
+
+class ResolveMeetingSpeakersResponse(BaseModel):
+    """Full meeting resolution response including per-cluster decisions and the complete audit dossier."""
+    meeting_id: str
+    decisions: List[ClusterResolution]
+    dossier: dict
+    total_clusters_resolved: int
+    auto_committed_count: int
+    suggested_count: int
+

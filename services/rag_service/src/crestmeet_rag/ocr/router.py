@@ -127,3 +127,21 @@ def simulate_voting(request: VotingSimulationRequest):
         suggestion_threshold=request.suggestion_threshold,
         margin_threshold=request.margin_threshold,
     )
+
+
+@router.post("/resolve-meeting-speakers", response_model=ResolveMeetingSpeakersResponse)
+def api_resolve_meeting_speakers(request: ResolveMeetingSpeakersRequest):
+    """
+    End-to-end meeting speaker name resolution combining:
+    - Screen/video frame active speaker tile detection & RapidOCR on label crops
+    - Pinned/spotlight tile neutralization via neighbor frame consistency
+    - Transcript conversational cues (self-introduction, handoff address, thank-you acknowledgment)
+    - Bayesian probability scoring and 1-to-1 conflict resolution
+    - Generation of the complete Meeting Dossier audit JSON
+    """
+    try:
+        from crestmeet_rag.ocr.resolver import resolve_meeting_speakers
+        return resolve_meeting_speakers(request, ocr_engine)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to resolve meeting speakers: {str(e)}")
+
