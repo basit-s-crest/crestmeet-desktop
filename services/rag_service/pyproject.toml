@@ -26,6 +26,8 @@ dependencies = [
     "winrt-windows-graphics-imaging>=3.2.1; sys_platform == 'win32'",
     "winrt-windows-storage-streams>=3.2.1; sys_platform == 'win32'",
     "winrt-windows-globalization>=3.2.1; sys_platform == 'win32'",
+    "sherpa-onnx>=1.13.8",
+    "scikit-learn>=1.9.1",
 ]
 
 [project.optional-dependencies]

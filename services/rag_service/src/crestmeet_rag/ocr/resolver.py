@@ -177,27 +177,45 @@ def resolve_meeting_speakers(
             continue
 
     # 2. Neighbor consistency and global tile lift analysis
-    # If two consecutive frames for DIFFERENT clusters show the exact same tile rectangle,
-    # it indicates a pinned/spotlighted participant or shared presentation.
+    # If the exact same tile rectangle is highlighted across >= 3 different clusters or across a large time gap,
+    # it indicates a pinned/spotlighted participant or presentation.
     sorted_obs = sorted(raw_frame_observations, key=lambda x: x["timestamp"])
-    for i in range(len(sorted_obs) - 1):
-        curr = sorted_obs[i]
-        next_obs = sorted_obs[i + 1]
-        if curr["cluster_key"] != next_obs["cluster_key"]:
-            r1 = curr.get("tile_rect")
-            r2 = next_obs.get("tile_rect")
-            if r1 and r2:
-                # Check spatial closeness: |x1 - x2| < 20 and |y1 - y2| < 20 and |w1 - w2| < 20
-                if abs(r1[0] - r2[0]) < 20 and abs(r1[1] - r2[1]) < 20 and abs(r1[2] - r2[2]) < 25:
-                    curr["is_pinned_or_spotlight"] = True
-                    next_obs["is_pinned_or_spotlight"] = True
+    tile_cluster_counts: Dict[Tuple[int, int], set] = {}
+    for obs in sorted_obs:
+        r = obs.get("tile_rect")
+        if r:
+            # Quantize coordinates to 25px grid to group near-identical tiles
+            key = (r[0] // 25, r[1] // 25)
+            tile_cluster_counts.setdefault(key, set()).add(obs["cluster_key"])
+
+    # A tile is flagged as pinned/spotlight only if it is persistently highlighted across >= 3 distinct clusters
+    for obs in sorted_obs:
+        r = obs.get("tile_rect")
+        if r:
+            key = (r[0] // 25, r[1] // 25)
+            if len(tile_cluster_counts.get(key, set())) >= 3:
+                obs["is_pinned_or_spotlight"] = True
 
     # 3. Extract transcript cues
     transcript_cues_by_cluster = extract_transcript_cues(request.segments, attendees)
 
     # 4. Bayesian Probability Calculation per Cluster
-    # Candidate set: known attendees + "OTHER"
-    candidate_names = list(attendees)
+    # Candidate set: known attendees + discovered names on screen + "OTHER"
+    # (Per SINGLE_FRAME_EVIDENCE_BASELINE_POC.md: candidates include names seen on screen)
+    ui_noise_words = {
+        "crestmeet", "devtools", "search", "untitled", "unknown", "sunny",
+        "presentation", "presenting", "muted", "reactions", "participants", "askgemini"
+    }
+    discovered_names: List[str] = []
+    for obs in sorted_obs:
+        for candidate_text in [obs.get("active_speaker_name"), obs.get("cleaned_name")]:
+            if candidate_text and len(candidate_text.strip()) >= 3:
+                norm = candidate_text.strip()
+                if not any(w in norm.lower() for w in ui_noise_words):
+                    if norm not in attendees and norm not in discovered_names:
+                        discovered_names.append(norm)
+
+    candidate_names = list(attendees) + discovered_names
     if "OTHER" not in candidate_names:
         candidate_names.append("OTHER")
 
@@ -226,19 +244,16 @@ def resolve_meeting_speakers(
         # A. Highlight observations from frames
         valid_highlight_hits: Dict[str, int] = {}
         for obs in cluster_frames:
-            best_name = obs.get("matched_attendee") or obs.get("cleaned_name")
+            best_name = obs.get("matched_attendee") or obs.get("active_speaker_name") or obs.get("cleaned_name")
             if best_name and len(best_name) >= 2:
                 raw_names.append(best_name)
 
-            if obs.get("is_pinned_or_spotlight"):
-                # Neutralize pinned tile
-                reasons.append(f"tile_pinned_discounted_at_{obs['timestamp']:.1f}s")
-                continue
+            is_pinned = obs.get("is_pinned_or_spotlight", False)
 
-            if obs.get("active_speaker_detected") and obs.get("matched_attendee"):
-                att = obs["matched_attendee"]
+            if obs.get("active_speaker_detected") and best_name and best_name in candidate_names:
+                att = best_name
                 conf = obs.get("ocr_confidence", 0.9)
-                sim = obs.get("similarity_score", 0.8)
+                sim = obs.get("similarity_score", 1.0) if obs.get("matched_attendee") else 0.85
                 valid_highlight_hits[att] = valid_highlight_hits.get(att, 0) + 1
                 evidence_types_seen.add("highlight")
 
@@ -247,13 +262,18 @@ def resolve_meeting_speakers(
                 denom = max((1.0 - alpha) / max(num_candidates - 1, 1), 0.01)
                 lr = min(alpha / denom, 8.0)
 
+                if is_pinned:
+                    # Neutralize pinned tile: reduce likelihood weight rather than dropping completely
+                    lr = max(lr * 0.35, 1.2)
+                    reasons.append(f"tile_pinned_discounted_at_{obs['timestamp']:.1f}s")
+
                 if att in log_odds:
                     log_odds[att] += math.log(lr)
                 reasons.append(f"highlight_seen_at_{obs['timestamp']:.1f}s({att})")
 
-            elif obs.get("matched_attendee"):
+            elif best_name and best_name in candidate_names:
                 # Grid tile label seen (without explicit border)
-                att = obs["matched_attendee"]
+                att = best_name
                 evidence_types_seen.add("grid_label")
                 if att in log_odds:
                     log_odds[att] += math.log(2.5)

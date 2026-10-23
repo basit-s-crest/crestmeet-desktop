@@ -1,5 +1,6 @@
 """FastAPI router for Pyannote diarization and speaker verification testing."""
 
+from typing import Optional
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from crestmeet_rag.pyannote.engine import PyannoteEngine
 from crestmeet_rag.pyannote.schemas import (
@@ -102,14 +103,23 @@ def verify_embedding_vectors(request: SpeakerVerificationRequest):
 @router.post("/diarize", response_model=DiarizationResponse)
 async def diarize_meeting_audio(
     file: UploadFile = File(..., description="Multi-speaker meeting audio recording (WAV/MP3)"),
+    cluster_threshold: float = 0.72,
+    num_speakers: Optional[int] = None,
 ):
     """
-    Run offline speaker diarization on a meeting recording.
-    Segments audio and clusters speech into mic:S0 and system speakers (sys:S1, sys:S2).
+    Run offline neural acoustic speaker diarization on a meeting recording.
+    Uses Pyannote Segmentation-3.0 neural powerset tracking and 3D-Speaker embeddings
+    to segment and cluster speech turns into distinct speaker clusters (sys:S1, sys:S2...).
+    Optionally pass num_speakers (e.g., 2) to force exact number of speaker clusters.
     """
     try:
         contents = await file.read()
         audio_data, sr = pyannote_engine.load_audio_from_bytes(contents)
-        return pyannote_engine.diarize_audio(audio_data, sr)
+        return pyannote_engine.diarize_audio(
+            audio_data,
+            sr,
+            cluster_threshold=cluster_threshold,
+            num_speakers=num_speakers,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Diarization failed: {str(e)}")

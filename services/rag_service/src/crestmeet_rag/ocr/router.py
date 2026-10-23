@@ -12,6 +12,8 @@ from crestmeet_rag.ocr.schemas import (
     FuzzyMatchResponse,
     OcrRecognizeRequest,
     OcrRecognizeResponse,
+    ResolveMeetingSpeakersRequest,
+    ResolveMeetingSpeakersResponse,
     VotingSimulationRequest,
     VotingSimulationResponse,
 )
