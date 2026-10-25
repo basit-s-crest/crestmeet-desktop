@@ -1,6 +1,22 @@
-"""FastAPI HTTP service for CrestMeet RAG, OCR, and Pyannote Model Verification."""
-
+import logging
+import sys
+import warnings
 from typing import List
+
+# Suppress known deprecated TorchAudio and Silero VAD library warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="silero_vad")
+
+# Ensure standard output logging is active if invoked via python -m crestmeet_rag.api
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+logging.getLogger("diarize").setLevel(logging.INFO)
+logging.getLogger("crestmeet_rag").setLevel(logging.INFO)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -15,7 +31,7 @@ from crestmeet_rag.models.schemas import (
     KnowledgeChunk,
 )
 from crestmeet_rag.ocr.router import router as ocr_router
-from crestmeet_rag.pyannote.router import router as pyannote_router
+from crestmeet_rag.pyannote_3_0.router import router as diarize_router
 
 tags_metadata = [
     {
@@ -23,8 +39,8 @@ tags_metadata = [
         "description": "Verify screen OCR name extraction, app layout adapters (Teams, Zoom, Google Meet), attendee fuzzy matching, and Hungarian 1-to-1 voting solver.",
     },
     {
-        "name": "Pyannote Diarization & Speaker Verification",
-        "description": "Test Pyannote 3.0 audio segmentation / VAD, WeSpeaker 512-dimensional speaker embeddings, cosine similarity, and multi-turn meeting diarization.",
+        "name": "Pyannote 3.1 ONNX Diarization",
+        "description": "Production offline neural speaker diarization using Pyannote 3.1 powerset segmentation ONNX + WeSpeaker embeddings with calibrated cosine confidence, UNKNOWN thresholding, and anti-chaining average linkage.",
     },
     {
         "name": "RAG & Knowledge Chunking",
@@ -34,8 +50,8 @@ tags_metadata = [
 
 app = FastAPI(
     title="CrestMeet Backend & Model Verification Service",
-    description="Local service for testing and verifying OCR screen recognition, Pyannote diarization, speaker verification, and RAG chunking.",
-    version="0.2.0",
+    description="Local service for OCR screen recognition, Pyannote 3.1 ONNX diarization, and RAG chunking.",
+    version="0.3.0",
     openapi_tags=tags_metadata,
 )
 
@@ -49,7 +65,7 @@ app.add_middleware(
 
 # Mount verification routers
 app.include_router(ocr_router)
-app.include_router(pyannote_router)
+app.include_router(diarize_router)
 
 chunker = SpeakerTurnChunker()
 embedder = LocalEmbedder()
@@ -68,6 +84,7 @@ def health():
         "embedding_model": embedder.model_tag,
         "dimension": embedder.dimension,
         "ocr_available": True,
+        "diarization_engine": "pyannote/speaker-diarization-3.1 (ONNX Extended)",
         "pyannote_available": True,
     }
 
@@ -142,4 +159,4 @@ def trigger_index_meeting(meeting_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("crestmeet_rag.api:app", host="127.0.0.1", port=8123, reload=False)
+    uvicorn.run("crestmeet_rag.api:app", host="127.0.0.1", port=8123, reload=True)

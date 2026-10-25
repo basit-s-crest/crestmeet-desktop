@@ -28,6 +28,10 @@ dependencies = [
     "winrt-windows-globalization>=3.2.1; sys_platform == 'win32'",
     "sherpa-onnx>=1.13.8",
     "scikit-learn>=1.9.1",
+    "diarize>=0.1.2",
+    "librosa>=0.11.0",
+    "pyannote-core>=6.1.0",
+    "av>=18.1.0",
 ]
 
 [project.optional-dependencies]
